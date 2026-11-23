@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">PokéFusion Studio</string>
+    <string name="studio_subtitle">Omni-Console Pixel &amp; 3D Shader Game Engine</string>
+    <string name="sign_in_google">Sign in with Google to Launch Studio</string>
+</resources>

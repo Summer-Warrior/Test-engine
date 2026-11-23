@@ -1,0 +1,6 @@
+{
+  "name": "PokéFusion Studio",
+  "description": "Cloud-connected Pokémon fan game development studio featuring an integrated multi-console sprite and 3D shader fusion engine, native franchise database, custom creature creator, and persistent asset sidebar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

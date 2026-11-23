@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Gold Super FX Chip Ring -->
+    <path
+        android:fillColor="#FFD166"
+        android:pathData="M54,22A32,32 0,1 1,22 54A32,32 0,0 1,54 22ZM54,27A27,27 0,1 0,81 54A27,27 0,0 0,54 27Z" />
+    <!-- Left Half: Electric Crimson 16-Bit Pixel Hemisphere -->
+    <path
+        android:fillColor="#FF2A85"
+        android:pathData="M52,28A26,26 0,0 0,28 52L43,52A11,11 0,0 1,52 43Z" />
+    <!-- Right Half: Cyber Cyan 3D Polygon Facet Hemisphere -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M56,28L56,43A11,11 0,0 1,65 52L80,52A26,26 0,0 0,56 28Z" />
+    <!-- Lower Voxel Core -->
+    <path
+        android:fillColor="#A855F7"
+        android:pathData="M28,56A26,26 0,0 0,80 56L65,56A11,11 0,0 1,43 56Z" />
+    <!-- Center Fusion Crystal Core -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M54,46L62,54L54,62L46,54Z" />
+</vector>

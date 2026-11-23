@@ -1,0 +1,166 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidFanGameProject(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 80 &&
+             data.regionName is string && data.regionName.size() >= 1 && data.regionName.size() <= 60 &&
+             data.synopsis is string && data.synopsis.size() >= 1 && data.synopsis.size() <= 500 &&
+             data.consoleMatrixPreset is string && data.consoleMatrixPreset.size() >= 1 && data.consoleMatrixPreset.size() <= 80 &&
+             data.activeChipsCsv is string && data.activeChipsCsv.size() <= 300 &&
+             data.pixel3dBlendRatio is int && data.pixel3dBlendRatio >= 0 && data.pixel3dBlendRatio <= 100 &&
+             data.dexCount is int && data.dexCount >= 0 && data.dexCount <= 2000 &&
+             data.mapCount is int && data.mapCount >= 0 && data.mapCount <= 500 &&
+             data.versionTag is string && data.versionTag.size() >= 1 && data.versionTag.size() <= 30 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCustomDexEntry(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+             data.dexNumber is int && data.dexNumber >= 1 && data.dexNumber <= 9999 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+             data.primaryType is string && data.primaryType.size() >= 1 && data.primaryType.size() <= 30 &&
+             data.secondaryType is string && data.secondaryType.size() <= 30 &&
+             data.abilityName is string && data.abilityName.size() >= 1 && data.abilityName.size() <= 60 &&
+             data.signatureMove is string && data.signatureMove.size() >= 1 && data.signatureMove.size() <= 60 &&
+             data.loreDescription is string && data.loreDescription.size() >= 1 && data.loreDescription.size() <= 500 &&
+             data.baseHp is int && data.baseHp >= 1 && data.baseHp <= 255 &&
+             data.baseAttack is int && data.baseAttack >= 1 && data.baseAttack <= 255 &&
+             data.baseDefense is int && data.baseDefense >= 1 && data.baseDefense <= 255 &&
+             data.baseSpAtk is int && data.baseSpAtk >= 1 && data.baseSpAtk <= 255 &&
+             data.baseSpDef is int && data.baseSpDef >= 1 && data.baseSpDef <= 255 &&
+             data.baseSpeed is int && data.baseSpeed >= 1 && data.baseSpeed <= 255 &&
+             data.baseSpriteId is int && data.baseSpriteId >= 1 && data.baseSpriteId <= 1025 &&
+             data.fusionStylePreset is string && data.fusionStylePreset.size() >= 1 && data.fusionStylePreset.size() <= 80 &&
+             data.enhancementChip is string && data.enhancementChip.size() >= 1 && data.enhancementChip.size() <= 60 &&
+             data.primaryHex is string && data.primaryHex.size() >= 4 && data.primaryHex.size() <= 9 &&
+             data.secondaryHex is string && data.secondaryHex.size() >= 4 && data.secondaryHex.size() <= 9 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCustomStudioAsset(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
+             data.consoleLineage is string && data.consoleLineage.size() >= 1 && data.consoleLineage.size() <= 120 &&
+             data.chipAddon is string && data.chipAddon.size() >= 1 && data.chipAddon.size() <= 80 &&
+             data.spriteSeedId is int && data.spriteSeedId >= 1 && data.spriteSeedId <= 1025 &&
+             data.shaderFormula is string && data.shaderFormula.size() >= 1 && data.shaderFormula.size() <= 200 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      match /fan_games/{gameId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(gameId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(gameId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'title', 'regionName', 'synopsis', 'consoleMatrixPreset',
+                           'activeChipsCsv', 'pixel3dBlendRatio', 'dexCount', 'mapCount',
+                           'versionTag', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'title', 'regionName', 'synopsis', 'consoleMatrixPreset',
+                           'activeChipsCsv', 'pixel3dBlendRatio', 'dexCount', 'mapCount',
+                           'versionTag', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidFanGameProject(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(userId) && isValidId(gameId) &&
+                         isValidFanGameProject(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'title', 'regionName', 'synopsis', 'consoleMatrixPreset',
+                           'activeChipsCsv', 'pixel3dBlendRatio', 'dexCount', 'mapCount',
+                           'versionTag', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(gameId);
+      }
+
+      match /custom_dex/{entryId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(entryId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(entryId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
+                           'abilityName', 'signatureMove', 'loreDescription', 'baseHp', 'baseAttack',
+                           'baseDefense', 'baseSpAtk', 'baseSpDef', 'baseSpeed', 'baseSpriteId',
+                           'fusionStylePreset', 'enhancementChip', 'primaryHex', 'secondaryHex',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
+                           'abilityName', 'signatureMove', 'loreDescription', 'baseHp', 'baseAttack',
+                           'baseDefense', 'baseSpAtk', 'baseSpDef', 'baseSpeed', 'baseSpriteId',
+                           'fusionStylePreset', 'enhancementChip', 'primaryHex', 'secondaryHex',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCustomDexEntry(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(userId) && isValidId(entryId) &&
+                         isValidCustomDexEntry(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
+                           'abilityName', 'signatureMove', 'loreDescription', 'baseHp', 'baseAttack',
+                           'baseDefense', 'baseSpAtk', 'baseSpDef', 'baseSpeed', 'baseSpriteId',
+                           'fusionStylePreset', 'enhancementChip', 'primaryHex', 'secondaryHex',
+                           'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(entryId);
+      }
+
+      match /custom_assets/{assetId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(assetId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(assetId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'name', 'category', 'consoleLineage', 'chipAddon',
+                           'spriteSeedId', 'shaderFormula', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'category', 'consoleLineage', 'chipAddon',
+                           'spriteSeedId', 'shaderFormula', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCustomStudioAsset(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(userId) && isValidId(assetId) &&
+                         isValidCustomStudioAsset(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'category', 'consoleLineage', 'chipAddon',
+                           'spriteSeedId', 'shaderFormula', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(assetId);
+      }
+    }
+  }
+}

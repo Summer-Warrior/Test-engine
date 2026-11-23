@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "FanGameProject": {
+      "title": "FanGameProject",
+      "description": "A cloud-synced Pokemon fan game development project featuring multi-console sprite and 3D model fusion settings.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the Google-authenticated creator." },
+        "title": { "type": "string", "description": "Title of the Pokemon fan game project." },
+        "regionName": { "type": "string", "description": "Name of the game's region." },
+        "synopsis": { "type": "string", "description": "Story synopsis and worldbuilding summary." },
+        "consoleMatrixPreset": { "type": "string", "description": "Active multi-console pixel and 3D fusion preset." },
+        "activeChipsCsv": { "type": "string", "description": "Comma-separated list of active official and fan-made hardware enhancement chips." },
+        "pixel3dBlendRatio": { "type": "integer", "description": "Percentage blend (0-100) between pixel sprite engines and 3D polygonal/voxel shader models." },
+        "dexCount": { "type": "integer", "description": "Number of species registered in the project's regional Pokedex." },
+        "mapCount": { "type": "integer", "description": "Number of overworld and dungeon maps in the project." },
+        "versionTag": { "type": "string", "description": "Build version tag." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update server timestamp." }
+      },
+      "required": [
+        "userId", "title", "regionName", "synopsis", "consoleMatrixPreset",
+        "activeChipsCsv", "pixel3dBlendRatio", "dexCount", "mapCount",
+        "versionTag", "createdAt", "updatedAt"
+      ]
+    },
+    "CustomDexEntry": {
+      "title": "CustomDexEntry",
+      "description": "A unique user-created Pokemon species, regional variant, or chip-fused evolution stored in the cloud alongside the native franchise database.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the Google-authenticated creator." },
+        "dexNumber": { "type": "integer", "description": "National or custom Pokedex number." },
+        "name": { "type": "string", "description": "Species name." },
+        "category": { "type": "string", "description": "Species classification." },
+        "primaryType": { "type": "string", "description": "Primary elemental type." },
+        "secondaryType": { "type": "string", "description": "Secondary elemental type." },
+        "abilityName": { "type": "string", "description": "Primary ability name." },
+        "signatureMove": { "type": "string", "description": "Signature move name." },
+        "loreDescription": { "type": "string", "description": "Pokedex lore entry and custom data." },
+        "baseHp": { "type": "integer", "description": "Base HP stat (1-255)." },
+        "baseAttack": { "type": "integer", "description": "Base Attack stat (1-255)." },
+        "baseDefense": { "type": "integer", "description": "Base Defense stat (1-255)." },
+        "baseSpAtk": { "type": "integer", "description": "Base Special Attack stat (1-255)." },
+        "baseSpDef": { "type": "integer", "description": "Base Special Defense stat (1-255)." },
+        "baseSpeed": { "type": "integer", "description": "Base Speed stat (1-255)." },
+        "baseSpriteId": { "type": "integer", "description": "Base franchise species ID (1-1025)." },
+        "fusionStylePreset": { "type": "string", "description": "Visual fusion pipeline preset." },
+        "enhancementChip": { "type": "string", "description": "Hardware or fan-made co-processor shader chip." },
+        "primaryHex": { "type": "string", "description": "Primary palette hex color." },
+        "secondaryHex": { "type": "string", "description": "Secondary palette hex color." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update server timestamp." }
+      },
+      "required": [
+        "userId", "dexNumber", "name", "category", "primaryType", "secondaryType",
+        "abilityName", "signatureMove", "loreDescription", "baseHp", "baseAttack",
+        "baseDefense", "baseSpAtk", "baseSpDef", "baseSpeed", "baseSpriteId",
+        "fusionStylePreset", "enhancementChip", "primaryHex", "secondaryHex",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "CustomStudioAsset": {
+      "title": "CustomStudioAsset",
+      "description": "A custom fused sprite, 3D model rig, tileset, hardware chip shader, or map asset pinned in the categorized side navigation bar.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the Google-authenticated creator." },
+        "name": { "type": "string", "description": "Asset display name." },
+        "category": { "type": "string", "description": "Asset category shown in the persistent side navigation bar." },
+        "consoleLineage": { "type": "string", "description": "Console & handheld visual systems fused in this asset." },
+        "chipAddon": { "type": "string", "description": "Official or fan-made expansion chip applied." },
+        "spriteSeedId": { "type": "integer", "description": "Reference species ID for visual preview." },
+        "shaderFormula": { "type": "string", "description": "Shader & palette fusion configuration string." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update server timestamp." }
+      },
+      "required": [
+        "userId", "name", "category", "consoleLineage", "chipAddon",
+        "spriteSeedId", "shaderFormula", "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/fan_games/{gameId}": {
+      "schema": { "$ref": "#/entities/FanGameProject" },
+      "description": "User-owned cloud fan game projects."
+    },
+    "/users/{userId}/custom_dex/{entryId}": {
+      "schema": { "$ref": "#/entities/CustomDexEntry" },
+      "description": "User-authored custom Pokemon / Fakemon / regional species."
+    },
+    "/users/{userId}/custom_assets/{assetId}": {
+      "schema": { "$ref": "#/entities/CustomStudioAsset" },
+      "description": "User-authored fused pixel/3D assets displayed in the categorized side navigation bar."
+    }
+  }
+}
