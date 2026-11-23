@@ -10,13 +10,15 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.data.remote.NetworkClientProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 @Entity(tableName = "native_pokemon")
 data class NativePokemonEntity(
@@ -79,18 +81,176 @@ interface NativePokemonDao {
     StudioResourceEntity::class,
     EncyclopediaEntryEntity::class,
     EncyclopediaSourceStatusEntity::class,
+    HardwareProfileEntity::class,
+    SavedSpriteEntity::class,
+    SavedMapEntity::class,
+    StudioItemEntity::class,
+    AtlasProgressEntity::class,
+    CampaignStateEntity::class,
   ],
-  version = 2,
+  version = 3,
   exportSchema = false,
 )
 abstract class NativePokemonDatabase : RoomDatabase() {
   abstract fun pokemonDao(): NativePokemonDao
   abstract fun resourceDao(): StudioResourceDao
   abstract fun encyclopediaDao(): EncyclopediaDao
+  abstract fun studioPersistenceDao(): StudioPersistenceDao
 
   companion object {
     @Volatile
     private var INSTANCE: NativePokemonDatabase? = null
+
+    val MIGRATION_1_2 = object : Migration(1, 2) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `studio_resources` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `name` TEXT NOT NULL,
+            `categoryId` TEXT NOT NULL,
+            `formatTag` TEXT NOT NULL,
+            `consoleChip` TEXT NOT NULL,
+            `durationOrGrid` TEXT NOT NULL,
+            `payloadSpec` TEXT NOT NULL,
+            `accentHex` TEXT NOT NULL,
+            `frequencyHz` INTEGER NOT NULL,
+            `tileTypeIndex` INTEGER NOT NULL,
+            `assignedProjectIdsCsv` TEXT NOT NULL,
+            `description` TEXT NOT NULL,
+            `isBuiltIn` INTEGER NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `encyclopedia_entries` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `title` TEXT NOT NULL,
+            `domainCategory` TEXT NOT NULL,
+            `sourceOrigin` TEXT NOT NULL,
+            `sourceUrl` TEXT NOT NULL,
+            `dexRangeOrTag` TEXT NOT NULL,
+            `summary` TEXT NOT NULL,
+            `structuredData` TEXT NOT NULL,
+            `lastUpdatedEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `encyclopedia_sources` (
+            `sourceId` TEXT NOT NULL PRIMARY KEY,
+            `displayName` TEXT NOT NULL,
+            `baseUrl` TEXT NOT NULL,
+            `lastSyncEpochMs` INTEGER NOT NULL,
+            `httpStatusCode` INTEGER NOT NULL,
+            `liveHeadline` TEXT NOT NULL,
+            `entryCount` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+      }
+    }
+
+    val MIGRATION_2_3 = object : Migration(2, 3) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `hardware_profiles` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `name` TEXT NOT NULL,
+            `manufacturer` TEXT NOT NULL,
+            `year` INTEGER NOT NULL,
+            `generation` TEXT NOT NULL,
+            `category` TEXT NOT NULL,
+            `gpuChip` TEXT NOT NULL,
+            `audioChip` TEXT NOT NULL,
+            `videoModes` TEXT NOT NULL,
+            `primaryDomain` TEXT NOT NULL,
+            `honoredSignature` TEXT NOT NULL,
+            `brokenLimitation` TEXT NOT NULL,
+            `graphicsJson` TEXT NOT NULL,
+            `audioJson` TEXT NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `saved_sprites` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `projectId` TEXT NOT NULL,
+            `name` TEXT NOT NULL,
+            `spriteSeedId` INTEGER NOT NULL,
+            `paletteJson` TEXT NOT NULL,
+            `framesRleJson` TEXT NOT NULL,
+            `frameCount` INTEGER NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `saved_maps` (
+            `mapKey` TEXT NOT NULL PRIMARY KEY,
+            `projectId` TEXT NOT NULL,
+            `regionId` TEXT NOT NULL,
+            `regionName` TEXT NOT NULL,
+            `gridSize` INTEGER NOT NULL,
+            `tilesCsv` TEXT NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `studio_items` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `name` TEXT NOT NULL,
+            `category` TEXT NOT NULL,
+            `description` TEXT NOT NULL,
+            `effectTag` TEXT NOT NULL,
+            `effectPower` REAL NOT NULL,
+            `quantity` INTEGER NOT NULL,
+            `accentHex` TEXT NOT NULL,
+            `regionOrigin` TEXT NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `atlas_progress` (
+            `dexNumber` INTEGER NOT NULL PRIMARY KEY,
+            `seen` INTEGER NOT NULL,
+            `battled` INTEGER NOT NULL,
+            `captured` INTEGER NOT NULL,
+            `hardwareHarmonized` INTEGER NOT NULL,
+            `harmonizedHardwareId` TEXT NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `campaign_state` (
+            `projectId` TEXT NOT NULL PRIMARY KEY,
+            `activeRegionId` TEXT NOT NULL,
+            `playerX` INTEGER NOT NULL,
+            `playerY` INTEGER NOT NULL,
+            `partyDexIdsCsv` TEXT NOT NULL,
+            `heldItemsMapCsv` TEXT NOT NULL,
+            `completedRegionIdsCsv` TEXT NOT NULL,
+            `harmonicShardsCsv` TEXT NOT NULL,
+            `activeHardwareIdsCsv` TEXT NOT NULL,
+            `disciplineModeToken` TEXT NOT NULL,
+            `extraPrettyMask` INTEGER NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+      }
+    }
 
     fun getInstance(context: Context): NativePokemonDatabase {
       return INSTANCE ?: synchronized(this) {
@@ -99,7 +259,7 @@ abstract class NativePokemonDatabase : RoomDatabase() {
           NativePokemonDatabase::class.java,
           "pokefusion_native_dex.db",
         )
-          .fallbackToDestructiveMigration(dropAllTables = true)
+          .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
           .build()
           .also { INSTANCE = it }
       }
@@ -109,12 +269,8 @@ abstract class NativePokemonDatabase : RoomDatabase() {
 
 class NativeFranchiseCatalogRepository(
   private val dao: NativePokemonDao,
+  private val httpClient: OkHttpClient = NetworkClientProvider.sharedOkHttpClient,
 ) {
-  private val httpClient = OkHttpClient.Builder()
-    .connectTimeout(8, TimeUnit.SECONDS)
-    .readTimeout(8, TimeUnit.SECONDS)
-    .build()
-
   val allNativePokemon: Flow<List<NativePokemonEntity>> = dao.observeAllPokemon()
 
   suspend fun ensureSeeded(): Int {
@@ -152,11 +308,12 @@ class NativeFranchiseCatalogRepository(
         val request = Request.Builder()
           .url("https://pokeapi.co/api/v2/pokemon/$cleanQuery")
           .build()
-        val response = httpClient.newCall(request).execute()
-        if (!response.isSuccessful) {
-          error("PokeAPI lookup failed (${response.code}) for '$dexIdOrName'")
+        val bodyStr = httpClient.newCall(request).execute().use { response ->
+          if (!response.isSuccessful) {
+            error("PokeAPI lookup failed (${response.code}) for '$dexIdOrName'")
+          }
+          response.body?.string() ?: error("Empty PokeAPI response")
         }
-        val bodyStr = response.body?.string() ?: error("Empty PokeAPI response")
         val json = JSONObject(bodyStr)
         val id = json.getInt("id")
         val rawName = json.getString("name").replaceFirstChar { it.uppercase() }

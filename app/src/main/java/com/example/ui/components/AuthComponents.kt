@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -126,6 +127,12 @@ fun attemptAutoSignIn(
   }
 }
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext?.findActivity()
+  else -> null
+}
+
 fun onGoogleSignInClicked(
   context: Context,
   credentialManager: CredentialManager,
@@ -134,6 +141,11 @@ fun onGoogleSignInClicked(
   scope: CoroutineScope,
   onAuthCancelled: () -> Unit = {},
 ) {
+  val activity = context.findActivity()
+  if (activity == null) {
+    onAuthError("Unable to locate host Activity for Google Sign-In.")
+    return
+  }
   val clientId = try {
     context.getString(R.string.default_web_client_id)
   } catch (e: Exception) {
@@ -148,7 +160,7 @@ fun onGoogleSignInClicked(
 
   scope.launch {
     try {
-      val result = credentialManager.getCredential(context as Activity, request)
+      val result = credentialManager.getCredential(activity, request)
       val credential = result.credential
       if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
         val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken

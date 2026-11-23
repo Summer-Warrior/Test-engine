@@ -12,12 +12,12 @@ data class FanGameProject(
   val title: String = "",
   val regionName: String = "",
   val synopsis: String = "",
-  val consoleMatrixPreset: String = "Omni-Era HD-2D + Super FX2 + 32X Voxel",
-  val activeChipsCsv: String = "Super FX2,SA-1,Sega 32X,SGB2 Border,N64 Expansion Pak,MSU-1,Voxelizer-FX",
+  val consoleMatrixPreset: String = "Shovel Knight+ Omni-Era Fusion",
+  val activeChipsCsv: String = "SHOVEL_KNIGHT_CURATED|super_fx2,sa_1,sega_32x,sgb2_border,n64_exp_pak,msu_1,voxelizer_fx,pokecrt_rtx",
   val pixel3dBlendRatio: Long = 65L,
-  val dexCount: Long = 151L,
-  val mapCount: Long = 12L,
-  val versionTag: String = "v1.0.0-FUSION",
+  val dexCount: Long = 1025L,
+  val mapCount: Long = 14L,
+  val versionTag: String = "v3.0.0-PRISM",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
 )
@@ -26,6 +26,7 @@ data class FanGameProject(
 data class CustomDexEntry(
   @DocumentId val id: String = "",
   val userId: String = "",
+  val projectId: String = "",
   val dexNumber: Long = 1026L,
   val name: String = "",
   val category: String = "Fusion Species",
@@ -56,6 +57,7 @@ data class CustomDexEntry(
 data class CustomStudioAsset(
   @DocumentId val id: String = "",
   val userId: String = "",
+  val projectId: String = "",
   val name: String = "",
   val category: String = AssetCategory.SPRITES.label,
   val consoleLineage: String = "GBC + GBA + DS + Switch HD-2D",
@@ -76,6 +78,71 @@ enum class AssetCategory(val id: String, val label: String, val badge: String) {
   AUDIO_FX("audio", "Audio & Chips", "MSU-1"),
 }
 
+enum class MasterDisciplineMode(val token: String, val label: String, val subtitle: String) {
+  SHOVEL_KNIGHT_CURATED(
+    token = "SHOVEL_KNIGHT_CURATED",
+    label = "Shovel Knight+ Curated",
+    subtitle = "Crisp shared pixel grid, 1px #0E1125 ink outline, clean cel ramps, 12-15fps stepped keyframes",
+  ),
+  MAXIMALIST_PRETTY(
+    token = "MAXIMALIST_PRETTY",
+    label = "Maximalist Pretty",
+    subtitle = "Unleashes extra voxels, volumetric rays, caustics, 60fps fluid character motion & lush reverb",
+  ),
+  RAW_HARDWARE_PURIST(
+    token = "RAW_HARDWARE_PURIST",
+    label = "Raw Hardware Purist",
+    subtitle = "Strict authenticity to selected hardware traits: DMG dot matrix, GBC dither, PS1 affine snap",
+  ),
+}
+
+enum class CharacterMixMode(val id: String, val label: String, val shortTag: String) {
+  SPLIT_BEAM_MORPH("split_beam", "Split-Beam 2D⇄3D", "2D⇄3D"),
+  VOXELIZER_FX_3D("voxelizer_fx", "Voxelizer-FX 3D", "VOXEL"),
+  HD2D_CRISP_SPRITE("hd2d_sprite", "HD-2D Crisp Sprite", "HD-2D"),
+  PIXEL_LOCKED_3D("pixel_locked_3d", "Pixel-Locked PICA200+Switch", "CEL-3D"),
+}
+
+data class ExtraVisualAudioSettings(
+  val ultraVoxelSlices: Boolean = false,
+  val dynamicWeatherParticles: Boolean = false,
+  val waterCausticsAndFoam: Boolean = false,
+  val hd2dVolumetricRaysAndBokeh: Boolean = false,
+  val foregroundParallaxFraming: Boolean = false,
+  val fluid60FpsCharacterMotion: Boolean = false,
+  val uncappedBloomAndRimFlares: Boolean = false,
+  val analogCrtPhosphorAndCurvature: Boolean = false,
+  val extraLushAudioReverbAndChoir: Boolean = false,
+) {
+  val enabledCount: Int
+    get() = listOf(
+      ultraVoxelSlices,
+      dynamicWeatherParticles,
+      waterCausticsAndFoam,
+      hd2dVolumetricRaysAndBokeh,
+      foregroundParallaxFraming,
+      fluid60FpsCharacterMotion,
+      uncappedBloomAndRimFlares,
+      analogCrtPhosphorAndCurvature,
+      extraLushAudioReverbAndChoir,
+    ).count { it }
+
+  companion object {
+    val ALL_ENABLED = ExtraVisualAudioSettings(
+      ultraVoxelSlices = true,
+      dynamicWeatherParticles = true,
+      waterCausticsAndFoam = true,
+      hd2dVolumetricRaysAndBokeh = true,
+      foregroundParallaxFraming = true,
+      fluid60FpsCharacterMotion = true,
+      uncappedBloomAndRimFlares = true,
+      analogCrtPhosphorAndCurvature = true,
+      extraLushAudioReverbAndChoir = true,
+    )
+    val ALL_DISABLED = ExtraVisualAudioSettings()
+  }
+}
+
 data class ConsoleChipAddon(
   val id: String,
   val name: String,
@@ -94,14 +161,17 @@ data class ConsoleEraLayer(
 )
 
 data class ConsoleFusionConfig(
-  val presetName: String = "Omni-Console Apex Fusion",
+  val presetName: String = "Shovel Knight+ Omni-Era Fusion",
   val pixelTo3dBlend: Float = 0.65f,
   val voxelExtrusionDepth: Float = 0.72f,
-  val crtScanlineIntensity: Float = 0.28f,
-  val hd2dVolumetricBloom: Float = 0.84f,
+  val crtScanlineIntensity: Float = 0.24f,
+  val hd2dVolumetricBloom: Float = 0.68f,
   val mode7PerspectiveTilt: Float = 0.45f,
-  val celOutlineWeight: Float = 0.60f,
-  val sgbPaletteWarmth: Float = 0.55f,
+  val celOutlineWeight: Float = 0.70f,
+  val sgbPaletteWarmth: Float = 0.50f,
+  val disciplineMode: MasterDisciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+  val characterMixMode: CharacterMixMode = CharacterMixMode.SPLIT_BEAM_MORPH,
+  val extraPretty: ExtraVisualAudioSettings = ExtraVisualAudioSettings(),
   val activeChipIds: Set<String> = setOf(
     "super_fx2",
     "sa_1",

@@ -96,7 +96,7 @@ class CanonEngineVerificationTest {
       gimmickMode = BattleGimmickMode.ANIME_COUNTER_SHIELD,
     )
 
-    val waterShuriken = MasterCanonTemplateCatalog.signatureMovePool[1]
+    val waterShuriken = MasterCanonTemplateCatalog.signatureMovePool.first { it.name.startsWith("Water Shuriken") }
     val normalFieldResult = CanonBattleResolver.resolveTurn(
       attacker = attacker,
       defender = defender,
@@ -120,7 +120,7 @@ class CanonEngineVerificationTest {
     assertEquals(0, terrainBlocked.maxDamage)
 
     // Contact move triggers Anime Counter-Shield chip recoil
-    val contactMove = MasterCanonTemplateCatalog.signatureMovePool[2]
+    val contactMove = MasterCanonTemplateCatalog.signatureMovePool.first { it.isContact }
     val contactResult = CanonBattleResolver.resolveTurn(
       attacker = attacker,
       defender = defender,
@@ -133,14 +133,16 @@ class CanonEngineVerificationTest {
   @Test
   fun `omni-region campaign prevents sequence-breaking and integrity audit passes`() {
     val start = CampaignProgressionState()
-    val sinnoh = MasterCanonTemplateCatalog.worldChapters.first { it.id == "sinnoh_coronet" }
-    val kanto = MasterCanonTemplateCatalog.worldChapters.first { it.id == "kanto_indigo" }
+    assertEquals(14, MasterCanonTemplateCatalog.worldChapters.size)
+    val sinnoh = MasterCanonTemplateCatalog.worldChapters.first { it.id == "sinnoh" }
+    val kanto = MasterCanonTemplateCatalog.worldChapters.first { it.id == "kanto" }
 
     val blockedSinnoh = start.completeChapter(sinnoh)
     assertTrue(blockedSinnoh.completedChapterIds.isEmpty())
 
     val afterKanto = start.completeChapter(kanto)
-    assertTrue("kanto_indigo" in afterKanto.completedChapterIds)
+    assertTrue("kanto" in afterKanto.completedChapterIds)
+    assertEquals(1, afterKanto.harmonicShardsCollected)
     assertTrue(afterKanto.worldCoronationRank < start.worldCoronationRank)
     assertTrue(afterKanto.validateInvariants().isEmpty())
 

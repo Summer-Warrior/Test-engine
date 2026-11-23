@@ -217,4 +217,100 @@ object SpritePixelMatrixEngine {
     }
     return outlined
   }
+
+  /**
+   * Compact run-length encoding for a 16x16 indexed pixel frame (-1..7).
+   * Example token: "t12,0x4,3x1" where 't' = transparent (-1) and '0'..'7' = palette index.
+   */
+  fun encodeFrameRle(pixels: List<Int>): String {
+    if (pixels.isEmpty()) return "t$PIXEL_COUNT"
+    val normalized = List(PIXEL_COUNT) { idx ->
+      pixels.getOrElse(idx) { -1 }.let { if (it in 0..7) it else -1 }
+    }
+    val sb = StringBuilder(128)
+    var i = 0
+    while (i < normalized.size) {
+      val v = normalized[i]
+      var run = 1
+      while (i + run < normalized.size && normalized[i + run] == v) {
+        run++
+      }
+      if (sb.isNotEmpty()) sb.append(',')
+      val sym = if (v < 0) "t" else v.toString()
+      if (run == 1) sb.append(sym) else sb.append(sym).append('x').append(run)
+      i += run
+    }
+    return sb.toString()
+  }
+
+  fun decodeFrameRle(encoded: String): List<Int> {
+    if (encoded.isBlank()) return List(PIXEL_COUNT) { -1 }
+    val out = ArrayList<Int>(PIXEL_COUNT)
+    encoded.split(',').forEach { token ->
+      val trimmed = token.trim()
+      if (trimmed.isEmpty()) return@forEach
+      val parts = trimmed.split('x')
+      val value = if (parts[0] == "t") -1 else parts[0].toIntOrNull()?.coerceIn(-1, 7) ?: -1
+      val count = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, PIXEL_COUNT) ?: 1
+      repeat(count) {
+        if (out.size < PIXEL_COUNT) out.add(value)
+      }
+    }
+    while (out.size < PIXEL_COUNT) out.add(-1)
+    return out
+  }
+
+  fun serializePaletteJson(paletteArgb: List<Long>): String {
+    val arr = org.json.JSONArray()
+    paletteArgb.take(8).forEach { arr.put(argbLongToHex(it)) }
+    return arr.toString()
+  }
+
+  fun deserializePaletteJson(paletteJson: String): List<Long> {
+    val fallback = buildInitialPalette("#00F5D4", "#FF2A85")
+    return runCatching {
+      val arr = org.json.JSONArray(paletteJson)
+      if (arr.length() == 0) return fallback
+      List(8) { idx ->
+        val hex = if (idx < arr.length()) arr.optString(idx) else ""
+        parseHexToArgbLong(hex, fallback[idx])
+      }
+    }.getOrDefault(fallback)
+  }
+
+  fun serializeFramesRleJson(frames: List<List<Int>>): String {
+    val arr = org.json.JSONArray()
+    frames.forEach { frame -> arr.put(encodeFrameRle(frame)) }
+    return arr.toString()
+  }
+
+  fun deserializeFramesRleJson(framesJson: String): List<List<Int>> {
+    return runCatching {
+      val arr = org.json.JSONArray(framesJson)
+      if (arr.length() == 0) return emptyList()
+      (0 until arr.length()).map { idx -> decodeFrameRle(arr.optString(idx)) }
+    }.getOrDefault(emptyList())
+  }
+
+  /**
+   * Renders an indexed 16x16 frame + 8-color ARGB palette into a crisp ARGB_8888 Bitmap
+   * for direct display in the Omni-Fusion Viewport, 3D Voxelizer-FX extrusion, and Game Test.
+   */
+  fun renderFrameToBitmap(pixels: List<Int>, paletteArgb: List<Long>, scale: Int = 4): Bitmap {
+    val safeScale = scale.coerceIn(1, 16)
+    val dim = GRID_SIZE * safeScale
+    val bmp = Bitmap.createBitmap(dim, dim, Bitmap.Config.ARGB_8888)
+    for (row in 0 until GRID_SIZE) {
+      for (col in 0 until GRID_SIZE) {
+        val slot = pixels.getOrElse(row * GRID_SIZE + col) { -1 }
+        val colorInt = if (slot in paletteArgb.indices) paletteArgb[slot].toInt() else Color.TRANSPARENT
+        for (dy in 0 until safeScale) {
+          for (dx in 0 until safeScale) {
+            bmp.setPixel(col * safeScale + dx, row * safeScale + dy, colorInt)
+          }
+        }
+      }
+    }
+    return bmp
+  }
 }

@@ -10,7 +10,7 @@
         "regionName": { "type": "string", "description": "Name of the game's region." },
         "synopsis": { "type": "string", "description": "Story synopsis and worldbuilding summary." },
         "consoleMatrixPreset": { "type": "string", "description": "Active multi-console pixel and 3D fusion preset." },
-        "activeChipsCsv": { "type": "string", "description": "Comma-separated list of active official and fan-made hardware enhancement chips." },
+        "activeChipsCsv": { "type": "string", "description": "Compact hardware preset token or comma-separated active hardware/chip IDs (up to 2000 chars)." },
         "pixel3dBlendRatio": { "type": "integer", "description": "Percentage blend (0-100) between pixel sprite engines and 3D polygonal/voxel shader models." },
         "dexCount": { "type": "integer", "description": "Number of species registered in the project's regional Pokedex." },
         "mapCount": { "type": "integer", "description": "Number of overworld and dungeon maps in the project." },
@@ -30,6 +30,7 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "UID of the Google-authenticated creator." },
+        "projectId": { "type": "string", "description": "Optional owning FanGameProject document ID for project-scoped species." },
         "dexNumber": { "type": "integer", "description": "National or custom Pokedex number." },
         "name": { "type": "string", "description": "Species name." },
         "category": { "type": "string", "description": "Species classification." },
@@ -66,6 +67,7 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "UID of the Google-authenticated creator." },
+        "projectId": { "type": "string", "description": "Optional owning FanGameProject document ID for project-scoped assets." },
         "name": { "type": "string", "description": "Asset display name." },
         "category": { "type": "string", "description": "Asset category shown in the persistent side navigation bar." },
         "consoleLineage": { "type": "string", "description": "Console & handheld visual systems fused in this asset." },

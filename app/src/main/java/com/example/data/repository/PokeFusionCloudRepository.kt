@@ -111,11 +111,11 @@ class PokeFusionCloudRepository(
       "regionName" to project.regionName.trim().take(60).ifEmpty { "Kanto-Neo" },
       "synopsis" to project.synopsis.trim().take(500).ifEmpty { "A multi-console fusion adventure." },
       "consoleMatrixPreset" to project.consoleMatrixPreset.trim().take(80).ifEmpty { "Omni-Era HD-2D" },
-      "activeChipsCsv" to project.activeChipsCsv.trim().take(300),
+      "activeChipsCsv" to project.activeChipsCsv.trim().take(2000),
       "pixel3dBlendRatio" to project.pixel3dBlendRatio.coerceIn(0L, 100L),
       "dexCount" to project.dexCount.coerceIn(0L, 2000L),
       "mapCount" to project.mapCount.coerceIn(0L, 500L),
-      "versionTag" to project.versionTag.trim().take(30).ifEmpty { "v1.0.0" },
+      "versionTag" to project.versionTag.trim().take(30).ifEmpty { "v3.0.0-PRISM" },
       "createdAt" to FieldValue.serverTimestamp(),
       "updatedAt" to FieldValue.serverTimestamp(),
     )
@@ -139,11 +139,11 @@ class PokeFusionCloudRepository(
       "regionName" to project.regionName.trim().take(60).ifEmpty { "Kanto-Neo" },
       "synopsis" to project.synopsis.trim().take(500).ifEmpty { "A multi-console fusion adventure." },
       "consoleMatrixPreset" to project.consoleMatrixPreset.trim().take(80).ifEmpty { "Omni-Era HD-2D" },
-      "activeChipsCsv" to project.activeChipsCsv.trim().take(300),
+      "activeChipsCsv" to project.activeChipsCsv.trim().take(2000),
       "pixel3dBlendRatio" to project.pixel3dBlendRatio.coerceIn(0L, 100L),
       "dexCount" to project.dexCount.coerceIn(0L, 2000L),
       "mapCount" to project.mapCount.coerceIn(0L, 500L),
-      "versionTag" to project.versionTag.trim().take(30).ifEmpty { "v1.0.0" },
+      "versionTag" to project.versionTag.trim().take(30).ifEmpty { "v3.0.0-PRISM" },
       "updatedAt" to FieldValue.serverTimestamp(),
     )
     try {
@@ -212,30 +212,32 @@ class PokeFusionCloudRepository(
   suspend fun createCustomDexEntry(entry: CustomDexEntry): Result<String> = runCatching {
     val uid = requireUserId()
     val docRef = db.collection("users").document(uid).collection("custom_dex").document()
-    val payload = mapOf(
-      "userId" to uid,
-      "dexNumber" to entry.dexNumber.coerceIn(1L, 9999L),
-      "name" to entry.name.trim().take(60).ifEmpty { "MissingNo-FX" },
-      "category" to entry.category.trim().take(60).ifEmpty { "Fusion Species" },
-      "primaryType" to entry.primaryType.trim().take(30).ifEmpty { "Electric" },
-      "secondaryType" to entry.secondaryType.trim().take(30),
-      "abilityName" to entry.abilityName.trim().take(60).ifEmpty { "Super FX Core" },
-      "signatureMove" to entry.signatureMove.trim().take(60).ifEmpty { "Mode-7 Burst" },
-      "loreDescription" to entry.loreDescription.trim().take(500).ifEmpty { "Synthesized across console generations." },
-      "baseHp" to entry.baseHp.coerceIn(1L, 255L),
-      "baseAttack" to entry.baseAttack.coerceIn(1L, 255L),
-      "baseDefense" to entry.baseDefense.coerceIn(1L, 255L),
-      "baseSpAtk" to entry.baseSpAtk.coerceIn(1L, 255L),
-      "baseSpDef" to entry.baseSpDef.coerceIn(1L, 255L),
-      "baseSpeed" to entry.baseSpeed.coerceIn(1L, 255L),
-      "baseSpriteId" to entry.baseSpriteId.coerceIn(1L, 1025L),
-      "fusionStylePreset" to entry.fusionStylePreset.trim().take(80).ifEmpty { "Omni-Console Hybrid" },
-      "enhancementChip" to entry.enhancementChip.trim().take(60).ifEmpty { "Super FX2 (GSU-2)" },
-      "primaryHex" to entry.primaryHex.trim().take(9).ifEmpty { "#00F5D4" },
-      "secondaryHex" to entry.secondaryHex.trim().take(9).ifEmpty { "#FF2A85" },
-      "createdAt" to FieldValue.serverTimestamp(),
-      "updatedAt" to FieldValue.serverTimestamp(),
-    )
+    val payload = buildMap<String, Any> {
+      put("userId", uid)
+      val cleanProjectId = entry.projectId.trim().take(128)
+      if (cleanProjectId.isNotEmpty()) put("projectId", cleanProjectId)
+      put("dexNumber", entry.dexNumber.coerceIn(1L, 9999L))
+      put("name", entry.name.trim().take(60).ifEmpty { "MissingNo-FX" })
+      put("category", entry.category.trim().take(60).ifEmpty { "Fusion Species" })
+      put("primaryType", entry.primaryType.trim().take(30).ifEmpty { "Electric" })
+      put("secondaryType", entry.secondaryType.trim().take(30))
+      put("abilityName", entry.abilityName.trim().take(60).ifEmpty { "Super FX Core" })
+      put("signatureMove", entry.signatureMove.trim().take(60).ifEmpty { "Mode-7 Burst" })
+      put("loreDescription", entry.loreDescription.trim().take(500).ifEmpty { "Synthesized across console generations." })
+      put("baseHp", entry.baseHp.coerceIn(1L, 255L))
+      put("baseAttack", entry.baseAttack.coerceIn(1L, 255L))
+      put("baseDefense", entry.baseDefense.coerceIn(1L, 255L))
+      put("baseSpAtk", entry.baseSpAtk.coerceIn(1L, 255L))
+      put("baseSpDef", entry.baseSpDef.coerceIn(1L, 255L))
+      put("baseSpeed", entry.baseSpeed.coerceIn(1L, 255L))
+      put("baseSpriteId", entry.baseSpriteId.coerceIn(1L, 1025L))
+      put("fusionStylePreset", entry.fusionStylePreset.trim().take(80).ifEmpty { "Omni-Console Hybrid" })
+      put("enhancementChip", entry.enhancementChip.trim().take(60).ifEmpty { "Super FX2 (GSU-2)" })
+      put("primaryHex", entry.primaryHex.trim().take(9).ifEmpty { "#00F5D4" })
+      put("secondaryHex", entry.secondaryHex.trim().take(9).ifEmpty { "#FF2A85" })
+      put("createdAt", FieldValue.serverTimestamp())
+      put("updatedAt", FieldValue.serverTimestamp())
+    }
     try {
       docRef.set(payload).await()
       docRef.id
@@ -288,17 +290,19 @@ class PokeFusionCloudRepository(
   suspend fun createCustomAsset(asset: CustomStudioAsset): Result<String> = runCatching {
     val uid = requireUserId()
     val docRef = db.collection("users").document(uid).collection("custom_assets").document()
-    val payload = mapOf(
-      "userId" to uid,
-      "name" to asset.name.trim().take(80).ifEmpty { "Fused Asset" },
-      "category" to asset.category.trim().take(40).ifEmpty { "Sprites" },
-      "consoleLineage" to asset.consoleLineage.trim().take(120).ifEmpty { "GBC + GBA + Switch HD-2D" },
-      "chipAddon" to asset.chipAddon.trim().take(80).ifEmpty { "Super FX2 + Voxelizer-FX" },
-      "spriteSeedId" to asset.spriteSeedId.coerceIn(1L, 1025L),
-      "shaderFormula" to asset.shaderFormula.trim().take(200).ifEmpty { "BLEND:65|VOXEL:72" },
-      "createdAt" to FieldValue.serverTimestamp(),
-      "updatedAt" to FieldValue.serverTimestamp(),
-    )
+    val payload = buildMap<String, Any> {
+      put("userId", uid)
+      val cleanProjectId = asset.projectId.trim().take(128)
+      if (cleanProjectId.isNotEmpty()) put("projectId", cleanProjectId)
+      put("name", asset.name.trim().take(80).ifEmpty { "Fused Asset" })
+      put("category", asset.category.trim().take(40).ifEmpty { "Sprites" })
+      put("consoleLineage", asset.consoleLineage.trim().take(120).ifEmpty { "GBC + GBA + Switch HD-2D" })
+      put("chipAddon", asset.chipAddon.trim().take(80).ifEmpty { "Super FX2 + Voxelizer-FX" })
+      put("spriteSeedId", asset.spriteSeedId.coerceIn(1L, 1025L))
+      put("shaderFormula", asset.shaderFormula.trim().take(1000).ifEmpty { "BLEND:65|VOXEL:72" })
+      put("createdAt", FieldValue.serverTimestamp())
+      put("updatedAt", FieldValue.serverTimestamp())
+    }
     try {
       docRef.set(payload).await()
       docRef.id

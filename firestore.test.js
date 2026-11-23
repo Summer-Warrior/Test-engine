@@ -152,3 +152,27 @@ test("Shadow update with ghost field or invalid blend ratio is rejected", async 
   // Invalid blend ratio (> 100)
   await assertFails(docRef.update({ pixel3dBlendRatio: 150, updatedAt: new Date() }));
 });
+
+test("Project-scoped custom_assets, custom_dex, and extended activeChipsCsv <= 2000 succeed", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const now = new Date();
+  const longChips = "ALL_ON_RECORD|" + Array.from({ length: 60 }, (_, i) => `hw_${i}`).join(",");
+  const gameRef = aliceDb.collection("users").doc(ALICE_UID).collection("fan_games").doc("prism_1");
+  await assertSucceeds(gameRef.set({ ...validGamePayload(ALICE_UID, now), activeChipsCsv: longChips }));
+
+  const scopedAsset = { ...validAssetPayload(ALICE_UID, now), projectId: "prism_1" };
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("custom_assets").doc("asset_scoped").set(scopedAsset)
+  );
+
+  const scopedDex = { ...validDexPayload(ALICE_UID, now), projectId: "prism_1" };
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("custom_dex").doc("dex_scoped").set(scopedDex)
+  );
+
+  // Invalid projectId characters are rejected
+  const badAsset = { ...validAssetPayload(ALICE_UID, now), projectId: "../bad/id" };
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("custom_assets").doc("asset_bad").set(badAsset)
+  );
+});

@@ -25,13 +25,19 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function isOptionalProjectId(data) {
+      return !('projectId' in data) ||
+             (data.projectId is string && data.projectId.size() <= 128 &&
+              (data.projectId == '' || data.projectId.matches('^[a-zA-Z0-9_\\-]+$')));
+    }
+
     function isValidFanGameProject(data, userId) {
       return data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 80 &&
              data.regionName is string && data.regionName.size() >= 1 && data.regionName.size() <= 60 &&
              data.synopsis is string && data.synopsis.size() >= 1 && data.synopsis.size() <= 500 &&
              data.consoleMatrixPreset is string && data.consoleMatrixPreset.size() >= 1 && data.consoleMatrixPreset.size() <= 80 &&
-             data.activeChipsCsv is string && data.activeChipsCsv.size() <= 300 &&
+             data.activeChipsCsv is string && data.activeChipsCsv.size() <= 2000 &&
              data.pixel3dBlendRatio is int && data.pixel3dBlendRatio >= 0 && data.pixel3dBlendRatio <= 100 &&
              data.dexCount is int && data.dexCount >= 0 && data.dexCount <= 2000 &&
              data.mapCount is int && data.mapCount >= 0 && data.mapCount <= 500 &&
@@ -42,6 +48,7 @@ service cloud.firestore {
 
     function isValidCustomDexEntry(data, userId) {
       return data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+             isOptionalProjectId(data) &&
              data.dexNumber is int && data.dexNumber >= 1 && data.dexNumber <= 9999 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
              data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
@@ -67,12 +74,13 @@ service cloud.firestore {
 
     function isValidCustomStudioAsset(data, userId) {
       return data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+             isOptionalProjectId(data) &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
              data.consoleLineage is string && data.consoleLineage.size() >= 1 && data.consoleLineage.size() <= 120 &&
              data.chipAddon is string && data.chipAddon.size() >= 1 && data.chipAddon.size() <= 80 &&
              data.spriteSeedId is int && data.spriteSeedId >= 1 && data.spriteSeedId <= 1025 &&
-             data.shaderFormula is string && data.shaderFormula.size() >= 1 && data.shaderFormula.size() <= 200 &&
+             data.shaderFormula is string && data.shaderFormula.size() >= 1 && data.shaderFormula.size() <= 1000 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -117,7 +125,7 @@ service cloud.firestore {
                            'createdAt', 'updatedAt'
                          ]) &&
                          incoming().keys().hasOnly([
-                           'userId', 'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
+                           'userId', 'projectId', 'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
                            'abilityName', 'signatureMove', 'loreDescription', 'baseHp', 'baseAttack',
                            'baseDefense', 'baseSpAtk', 'baseSpDef', 'baseSpeed', 'baseSpriteId',
                            'fusionStylePreset', 'enhancementChip', 'primaryHex', 'secondaryHex',
@@ -129,7 +137,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          incoming().diff(existing()).affectedKeys().hasOnly([
-                           'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
+                           'projectId', 'dexNumber', 'name', 'category', 'primaryType', 'secondaryType',
                            'abilityName', 'signatureMove', 'loreDescription', 'baseHp', 'baseAttack',
                            'baseDefense', 'baseSpAtk', 'baseSpDef', 'baseSpeed', 'baseSpriteId',
                            'fusionStylePreset', 'enhancementChip', 'primaryHex', 'secondaryHex',
@@ -147,7 +155,7 @@ service cloud.firestore {
                            'spriteSeedId', 'shaderFormula', 'createdAt', 'updatedAt'
                          ]) &&
                          incoming().keys().hasOnly([
-                           'userId', 'name', 'category', 'consoleLineage', 'chipAddon',
+                           'userId', 'projectId', 'name', 'category', 'consoleLineage', 'chipAddon',
                            'spriteSeedId', 'shaderFormula', 'createdAt', 'updatedAt'
                          ]) &&
                          isValidCustomStudioAsset(incoming(), userId);
@@ -156,7 +164,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          incoming().diff(existing()).affectedKeys().hasOnly([
-                           'name', 'category', 'consoleLineage', 'chipAddon',
+                           'projectId', 'name', 'category', 'consoleLineage', 'chipAddon',
                            'spriteSeedId', 'shaderFormula', 'updatedAt'
                          ]);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(assetId);

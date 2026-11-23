@@ -44,7 +44,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import coil.ImageLoader
+import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.example.engine.SpritePixelMatrixEngine
@@ -227,7 +227,7 @@ internal suspend fun loadSoftwareBitmapFromUrl(context: Context, url: String): B
   if (url.isBlank()) return null
   return withContext(Dispatchers.IO) {
     runCatching {
-      val loader = ImageLoader(context)
+      val loader = context.imageLoader
       val request = ImageRequest.Builder(context)
         .data(url)
         .allowHardware(false)

@@ -50,4 +50,12 @@ class SpritePixelMatrixEngineTest {
     assertEquals(0, filled[isolatedIdx])
     assertEquals(-1, filled[3 * SpritePixelMatrixEngine.GRID_SIZE + 0])
   }
+
+  @Test
+  fun rleEncodeDecode_roundtrips16x16FrameLosslessly() {
+    val original = SpritePixelMatrixEngine.generateSeededFrame(25, frameOffset = 1)
+    val rle = SpritePixelMatrixEngine.encodeFrameRle(original)
+    val decoded = SpritePixelMatrixEngine.decodeFrameRle(rle)
+    assertEquals(original, decoded)
+  }
 }

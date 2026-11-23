@@ -1,6 +1,6 @@
 package com.example.ui.components
 
-import androidx.compose.animation.core.FastOutSlowInEasing
+import android.graphics.Bitmap
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -28,10 +29,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
@@ -40,8 +42,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -51,19 +55,20 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.local.NativePokemonEntity
+import com.example.data.model.CharacterMixMode
+import com.example.data.model.ExtraVisualAudioSettings
+import com.example.data.model.MasterDisciplineMode
+import com.example.engine.ConvergedVisualParams
+import com.example.engine.HardwareConvergenceSolver
+import com.example.ui.shaders.shovelKnightEntityEffect
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
 import com.example.ui.theme.Mode7Sky
 import com.example.ui.theme.PressStart2PFamily
 import com.example.ui.theme.SgbEmerald
-import com.example.ui.theme.StudioCardDark
-import com.example.ui.theme.StudioDeepNavy
 import com.example.ui.theme.StudioTextPrimary
-import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
-import com.example.ui.theme.VoxelViolet
-import kotlin.math.PI
-import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.sin
 
@@ -74,11 +79,17 @@ enum class PokemonGraphicsStyle(val label: String) {
 }
 
 /**
- * High-fidelity Pokémon Sprite & 3D Cel-Shaded Model Character Renderer.
- * - Sprite mode uses FilterQuality.None (zero blur) + Gen V squash-and-stretch idle breathing
- *   and cast dark silhouette shadow.
- * - 3D Model mode uses HOME/Stadium renders with multi-angle cel ink outline pass, specular rim glow,
- *   camera perspective orbit, and grounded contact shadow.
+ * Unified Shovel Knight+ 2D Sprite & 3D Cel-Shaded Model Character Renderer.
+ *
+ * Replaces multi-copy AsyncImage silhouette hacks with single-pass AGSL ShovelKnightOmniShader
+ * and provides 4 non-muddy CharacterMixMode presentations (zero translucent double-exposure):
+ *  1) SPLIT_BEAM_MORPH: Clean clipRect beam dividing crisp pixel sprite & 3D cel render
+ *  2) VOXELIZER_FX_3D: Extruded beveled voxel slice stack (8 or 14 slices) for sprites & custom bitmaps
+ *  3) HD2D_CRISP_SPRITE: Nearest-neighbor sprite with AGSL ink outline, cel ramp & rim light
+ *  4) PIXEL_LOCKED_3D: 3D cel model snapped to the shared virtual pixel grid
+ *
+ * Honors ArcSys stepped character keyframes (~14 FPS default, 60 FPS when Fluid 60 FPS is enabled)
+ * and Universal Game Feel 2-frame hit-flash.
  */
 @Composable
 fun PokemonCharacterRenderer(
@@ -89,51 +100,88 @@ fun PokemonCharacterRenderer(
   size: Dp,
   modifier: Modifier = Modifier,
   mirrored: Boolean = false,
+  mixMode: CharacterMixMode = when (style) {
+    PokemonGraphicsStyle.SPRITE_CRISP -> CharacterMixMode.HD2D_CRISP_SPRITE
+    PokemonGraphicsStyle.MODEL_3D_CEL -> CharacterMixMode.PIXEL_LOCKED_3D
+    PokemonGraphicsStyle.HYBRID_FUSION -> CharacterMixMode.SPLIT_BEAM_MORPH
+  },
+  visuals: ConvergedVisualParams = remember {
+    HardwareConvergenceSolver.solveVisuals(
+      activePlatforms = emptyList(),
+      disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+      extraPretty = ExtraVisualAudioSettings(),
+    )
+  },
+  customSpriteBitmap: Bitmap? = null,
+  hitFlash: Boolean = false,
+  extraScaleX: Float = 1f,
+  extraScaleY: Float = 1f,
 ) {
   val infinite = rememberInfiniteTransition(label = "pkmn_char_idle_${pokemon.dexNumber}")
-  val breathPhase by infinite.animateFloat(
+  val rawCycleSec by infinite.animateFloat(
     initialValue = 0f,
-    targetValue = 1f,
+    targetValue = 6f,
     animationSpec = infiniteRepeatable(
-      animation = tween(durationMillis = 1500, easing = FastOutSlowInEasing),
-      repeatMode = RepeatMode.Reverse,
+      animation = tween(durationMillis = 6000, easing = LinearEasing),
+      repeatMode = RepeatMode.Restart,
     ),
-    label = "breath",
+    label = "cycle_sec",
   )
-  val orbitPhase by infinite.animateFloat(
-    initialValue = -1f,
-    targetValue = 1f,
-    animationSpec = infiniteRepeatable(
-      animation = tween(durationMillis = 3600, easing = LinearEasing),
-      repeatMode = RepeatMode.Reverse,
-    ),
-    label = "orbit",
-  )
+
+  // ArcSys stepped keyframe clock (14 FPS authentic sprite cadence unless 60 FPS Fluid Motion is on)
+  val stepFps = visuals.characterStepFps.coerceIn(8, 60)
+  val steppedTimeSec = if (stepFps >= 55) {
+    rawCycleSec
+  } else {
+    floor(rawCycleSec * stepFps) / stepFps.toFloat()
+  }
+
+  val breathPhase = (0.5f + 0.5f * sin(steppedTimeSec * 2.1f)).coerceIn(0f, 1f)
+  val orbitPhase = sin(steppedTimeSec * 1.05f)
 
   val primaryAccent = parseHexColorSafe(pokemon.primaryHex, CyberCyan)
-  val density = LocalDensity.current.density
+  val density = LocalDensity.current
+  val sizePx = with(density) { size.toPx() }
   val facingSign = if (mirrored) -1f else 1f
-  val spriteAlpha = when (style) {
-    PokemonGraphicsStyle.SPRITE_CRISP -> 1f
-    PokemonGraphicsStyle.MODEL_3D_CEL -> 0f
-    PokemonGraphicsStyle.HYBRID_FUSION -> (1f - pixelTo3dBlend * 0.72f).coerceIn(0f, 1f)
-  }
-  val modelAlpha = when (style) {
-    PokemonGraphicsStyle.SPRITE_CRISP -> 0f
-    PokemonGraphicsStyle.MODEL_3D_CEL -> 1f
-    PokemonGraphicsStyle.HYBRID_FUSION -> pixelTo3dBlend.coerceIn(0.08f, 1f)
+
+  val spriteScaleY = (1f - breathPhase * 0.045f) * extraScaleY
+  val spriteScaleX = (1f + breathPhase * 0.032f) * facingSign * extraScaleX
+  val floatOffsetY = (-breathPhase * 5.5f).dp
+  val shadowScale = (1f - breathPhase * 0.14f).coerceIn(0.75f, 1f)
+  val rotY = orbitPhase * (6f + extrusionDepth * 14f) * facingSign
+  val camDist = 14f * density.density
+
+  val customImageBitmap = remember(customSpriteBitmap) {
+    customSpriteBitmap?.asImageBitmap()
   }
 
-  val spriteScaleY = 1f - breathPhase * 0.045f
-  val spriteScaleX = (1f + breathPhase * 0.035f) * facingSign
-  val floatOffsetY = (-breathPhase * 6f).dp
-  val shadowScale = (1f - breathPhase * 0.14f).coerceIn(0.75f, 1f)
+  val effectiveMixMode = when {
+    customImageBitmap != null && mixMode == CharacterMixMode.SPLIT_BEAM_MORPH -> CharacterMixMode.VOXELIZER_FX_3D
+    style == PokemonGraphicsStyle.SPRITE_CRISP && mixMode == CharacterMixMode.SPLIT_BEAM_MORPH -> CharacterMixMode.HD2D_CRISP_SPRITE
+    style == PokemonGraphicsStyle.MODEL_3D_CEL && mixMode == CharacterMixMode.SPLIT_BEAM_MORPH -> CharacterMixMode.PIXEL_LOCKED_3D
+    else -> mixMode
+  }
+
+  val entityShaderModifier = Modifier.shovelKnightEntityEffect(
+    widthPx = sizePx,
+    heightPx = sizePx,
+    visuals = visuals,
+    timeSec = steppedTimeSec,
+    crystalGlint = (visuals.bloom * 0.6f).coerceIn(0.15f, 0.9f),
+    hitFlash = hitFlash,
+  )
+
+  val api24HitFlashFilter = if (hitFlash) {
+    ColorFilter.tint(Color.White, BlendMode.SrcAtop)
+  } else {
+    null
+  }
 
   Box(
     modifier = modifier.size(size),
     contentAlignment = Alignment.Center,
   ) {
-    // Grounded Elliptical Stadium Contact Shadow
+    // Grounded Elliptical Contact Shadow
     Canvas(
       modifier = Modifier
         .align(Alignment.BottomCenter)
@@ -146,8 +194,8 @@ fun PokemonCharacterRenderer(
       drawOval(
         brush = Brush.radialGradient(
           colors = listOf(
-            Color.Black.copy(alpha = 0.65f),
-            primaryAccent.copy(alpha = 0.2f),
+            Color.Black.copy(alpha = 0.68f),
+            primaryAccent.copy(alpha = 0.22f),
             Color.Transparent,
           ),
         ),
@@ -156,118 +204,230 @@ fun PokemonCharacterRenderer(
       )
     }
 
-    // Layer A: Crisp Gen III–V Nearest-Neighbor Animated Pixel Sprite Pass
-    if (spriteAlpha > 0.03f) {
-      // Crisp Cast Pixel Silhouette Echo (gives classic DS/HD-2D pop)
-      AsyncImage(
-        model = pokemon.pixelSpriteUrl,
-        contentDescription = null,
-        filterQuality = FilterQuality.None,
-        colorFilter = ColorFilter.tint(Color(0xFF04070E), BlendMode.SrcIn),
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-          .size(size * 0.9f)
-          .offset(x = (3f * extrusionDepth).dp, y = floatOffsetY + 4.dp)
-          .graphicsLayer {
-            alpha = spriteAlpha * 0.55f
-            scaleX = spriteScaleX
-            scaleY = spriteScaleY
-          },
-      )
-
-      // Primary Pixel-Art Sprite (Zero blur via FilterQuality.None)
-      AsyncImage(
-        model = pokemon.pixelSpriteUrl,
-        contentDescription = "${pokemon.name} Pixel Sprite",
-        filterQuality = FilterQuality.None,
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-          .size(size * 0.9f)
-          .offset(y = floatOffsetY)
-          .graphicsLayer {
-            alpha = spriteAlpha
-            scaleX = spriteScaleX
-            scaleY = spriteScaleY
-          },
-      )
-    }
-
-    // Layer B: 3D Cel-Shaded Model Pass (PICA200 Ink Outline + Specular Rim + 3D Perspective Orbit)
-    if (modelAlpha > 0.03f) {
-      val rotY = orbitPhase * (4f + extrusionDepth * 7f) * facingSign
-      val camDist = 14f * density
-
-      // Dark 3D Cel-Shaded Silhouette Ink Outline Pass (3DS / Switch anime toon contour)
-      val outlineOffsets = listOf(
-        (-2).dp to 0.dp,
-        2.dp to 0.dp,
-        0.dp to (-2).dp,
-        0.dp to 2.dp,
-      )
-      outlineOffsets.forEach { (ox, oy) ->
-        AsyncImage(
-          model = pokemon.home3dRenderUrl,
-          contentDescription = null,
-          filterQuality = FilterQuality.High,
-          colorFilter = ColorFilter.tint(Color(0xFF070B14), BlendMode.SrcIn),
-          contentScale = ContentScale.Fit,
+    when (effectiveMixMode) {
+      CharacterMixMode.HD2D_CRISP_SPRITE -> {
+        Box(
           modifier = Modifier
-            .size(size * 0.94f)
-            .offset(x = ox, y = floatOffsetY + oy)
+            .size(size * 0.92f)
+            .offset(y = floatOffsetY)
+            .then(entityShaderModifier)
             .graphicsLayer {
-              alpha = modelAlpha * 0.85f
-              rotationY = rotY
-              scaleX = facingSign * (0.96f + extrusionDepth * 0.06f)
-              scaleY = 0.96f + extrusionDepth * 0.06f - breathPhase * 0.025f
-              cameraDistance = camDist
+              scaleX = spriteScaleX
+              scaleY = spriteScaleY
             },
-        )
+          contentAlignment = Alignment.Center,
+        ) {
+          if (customImageBitmap != null) {
+            Image(
+              bitmap = customImageBitmap,
+              contentDescription = "${pokemon.name} Custom Pixel Sprite",
+              filterQuality = FilterQuality.None,
+              colorFilter = api24HitFlashFilter,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          } else {
+            AsyncImage(
+              model = pokemon.pixelSpriteUrl,
+              contentDescription = "${pokemon.name} Crisp HD-2D Sprite",
+              filterQuality = FilterQuality.None,
+              colorFilter = api24HitFlashFilter,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          }
+        }
       }
 
-      // Main 3D PBR/Cel Render
-      AsyncImage(
-        model = pokemon.home3dRenderUrl,
-        contentDescription = "${pokemon.name} 3D Model",
-        filterQuality = FilterQuality.High,
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-          .size(size * 0.94f)
-          .offset(y = floatOffsetY)
-          .graphicsLayer {
-            alpha = modelAlpha
-            rotationY = rotY
-            scaleX = facingSign * (0.96f + extrusionDepth * 0.06f)
-            scaleY = 0.96f + extrusionDepth * 0.06f - breathPhase * 0.025f
-            cameraDistance = camDist
-          },
-      )
+      CharacterMixMode.PIXEL_LOCKED_3D -> {
+        Box(
+          modifier = Modifier
+            .size(size * 0.95f)
+            .offset(y = floatOffsetY)
+            .then(entityShaderModifier)
+            .graphicsLayer {
+              rotationY = rotY
+              scaleX = facingSign * (0.96f + extrusionDepth * 0.06f) * extraScaleX
+              scaleY = (0.96f + extrusionDepth * 0.06f - breathPhase * 0.025f) * extraScaleY
+              cameraDistance = camDist
+            },
+          contentAlignment = Alignment.Center,
+        ) {
+          AsyncImage(
+            model = pokemon.home3dRenderUrl,
+            contentDescription = "${pokemon.name} Pixel-Locked 3D Cel Model",
+            filterQuality = FilterQuality.High,
+            colorFilter = api24HitFlashFilter,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+          )
+        }
+      }
 
-      // Subtle Elemental Rim-Light Aura Overlay matching Pokémon Type
-      AsyncImage(
-        model = pokemon.home3dRenderUrl,
-        contentDescription = null,
-        filterQuality = FilterQuality.Medium,
-        colorFilter = ColorFilter.tint(primaryAccent.copy(alpha = 0.25f), BlendMode.SrcAtop),
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-          .size(size * 0.94f)
-          .offset(y = floatOffsetY)
-          .graphicsLayer {
-            alpha = modelAlpha * 0.35f
-            rotationY = rotY
-            scaleX = facingSign * (0.96f + extrusionDepth * 0.06f)
-            scaleY = 0.96f + extrusionDepth * 0.06f - breathPhase * 0.025f
-            cameraDistance = camDist
-          },
-      )
+      CharacterMixMode.VOXELIZER_FX_3D -> {
+        val sliceCount = visuals.voxelSliceCount.coerceIn(6, 14)
+        val depthSpreadDp = (extrusionDepth.coerceIn(0.2f, 1f) * 14f)
+        val yawRad = orbitPhase * 0.55f * facingSign
+
+        Box(
+          modifier = Modifier
+            .size(size * 0.92f)
+            .offset(y = floatOffsetY)
+            .graphicsLayer {
+              rotationY = rotY * 1.35f
+              cameraDistance = camDist
+              scaleX = facingSign * extraScaleX
+              scaleY = spriteScaleY
+            },
+          contentAlignment = Alignment.Center,
+        ) {
+          for (i in sliceCount - 1 downTo 1) {
+            val t = i.toFloat() / sliceCount.toFloat()
+            val shiftX = (yawRad * depthSpreadDp * t).dp
+            val shiftY = (depthSpreadDp * 0.35f * t).dp
+            val shade = (0.38f + (1f - t) * 0.42f).coerceIn(0.28f, 0.85f)
+            val sliceTint = Color(
+              red = (primaryAccent.red * 0.35f + 0.08f) * shade,
+              green = (primaryAccent.green * 0.35f + 0.10f) * shade,
+              blue = (primaryAccent.blue * 0.45f + 0.18f) * shade,
+              alpha = 0.92f,
+            )
+            val sliceModifier = Modifier
+              .fillMaxSize()
+              .offset(x = shiftX, y = shiftY)
+
+            if (customImageBitmap != null) {
+              Image(
+                bitmap = customImageBitmap,
+                contentDescription = null,
+                filterQuality = FilterQuality.None,
+                colorFilter = ColorFilter.tint(sliceTint, BlendMode.Modulate),
+                contentScale = ContentScale.Fit,
+                modifier = sliceModifier,
+              )
+            } else {
+              AsyncImage(
+                model = pokemon.pixelSpriteUrl,
+                contentDescription = null,
+                filterQuality = FilterQuality.None,
+                colorFilter = ColorFilter.tint(sliceTint, BlendMode.Modulate),
+                contentScale = ContentScale.Fit,
+                modifier = sliceModifier,
+              )
+            }
+          }
+
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .then(entityShaderModifier),
+          ) {
+            if (customImageBitmap != null) {
+              Image(
+                bitmap = customImageBitmap,
+                contentDescription = "${pokemon.name} 3D Voxelized Custom Sprite",
+                filterQuality = FilterQuality.None,
+                colorFilter = api24HitFlashFilter,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+              )
+            } else {
+              AsyncImage(
+                model = pokemon.pixelSpriteUrl,
+                contentDescription = "${pokemon.name} 3D Voxelized Sprite",
+                filterQuality = FilterQuality.None,
+                colorFilter = api24HitFlashFilter,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+              )
+            }
+          }
+        }
+      }
+
+      CharacterMixMode.SPLIT_BEAM_MORPH -> {
+        val splitFraction = (1f - pixelTo3dBlend).coerceIn(0.06f, 0.94f)
+        Box(
+          modifier = Modifier
+            .size(size * 0.94f)
+            .offset(y = floatOffsetY),
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .drawWithContent {
+                clipRect(left = 0f, top = 0f, right = this.size.width * splitFraction, bottom = this.size.height) {
+                  this@drawWithContent.drawContent()
+                }
+              }
+              .then(entityShaderModifier)
+              .graphicsLayer {
+                scaleX = spriteScaleX
+                scaleY = spriteScaleY
+              },
+            contentAlignment = Alignment.Center,
+          ) {
+            AsyncImage(
+              model = pokemon.pixelSpriteUrl,
+              contentDescription = "${pokemon.name} Split-Beam 2D Sprite",
+              filterQuality = FilterQuality.None,
+              colorFilter = api24HitFlashFilter,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          }
+
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .drawWithContent {
+                clipRect(left = this.size.width * splitFraction, top = 0f, right = this.size.width, bottom = this.size.height) {
+                  this@drawWithContent.drawContent()
+                }
+              }
+              .then(entityShaderModifier)
+              .graphicsLayer {
+                rotationY = rotY
+                scaleX = facingSign * (0.96f + extrusionDepth * 0.06f) * extraScaleX
+                scaleY = (0.96f + extrusionDepth * 0.06f - breathPhase * 0.025f) * extraScaleY
+                cameraDistance = camDist
+              },
+            contentAlignment = Alignment.Center,
+          ) {
+            AsyncImage(
+              model = pokemon.home3dRenderUrl,
+              contentDescription = "${pokemon.name} Split-Beam 3D Model",
+              filterQuality = FilterQuality.High,
+              colorFilter = api24HitFlashFilter,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          }
+
+          Canvas(modifier = Modifier.fillMaxSize()) {
+            val beamX = this.size.width * splitFraction
+            drawLine(
+              brush = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, CyberCyan.copy(alpha = 0.55f), SuperFxGold, CyberCyan.copy(alpha = 0.55f), Color.Transparent),
+              ),
+              start = Offset(beamX, this.size.height * 0.08f),
+              end = Offset(beamX, this.size.height * 0.92f),
+              strokeWidth = 6f,
+            )
+            drawLine(
+              color = Color.White,
+              start = Offset(beamX, this.size.height * 0.14f),
+              end = Offset(beamX, this.size.height * 0.86f),
+              strokeWidth = 1.8f,
+            )
+          }
+        }
+      }
     }
   }
 }
 
-/**
- * Draws an angled elliptical Pokémon Battle Platform disc (authentic RPG battle ground pad)
- * with volumetric stadium glow rings.
- */
 fun DrawScope.drawPokemonBattlePlatform(
   center: Offset,
   widthPx: Float,
@@ -279,7 +439,6 @@ fun DrawScope.drawPokemonBattlePlatform(
   val topLeft = Offset(center.x - widthPx / 2f, center.y - heightPx / 2f)
   val ovalSize = Size(widthPx, heightPx)
 
-  // Ground Glow Halo
   drawOval(
     brush = Brush.radialGradient(
       colors = listOf(
@@ -294,7 +453,6 @@ fun DrawScope.drawPokemonBattlePlatform(
     size = Size(widthPx * 1.3f, heightPx * 1.6f),
   )
 
-  // Raised 3D Platform Rim Edge (gives depth like DS/3DS/Switch battle discs)
   drawOval(
     color = Color(0xFF0A1220),
     topLeft = topLeft.copy(y = topLeft.y + 6f),
@@ -307,7 +465,6 @@ fun DrawScope.drawPokemonBattlePlatform(
     style = Stroke(width = 2.5f),
   )
 
-  // Main Top Arena Disc Surface
   drawOval(
     brush = Brush.verticalGradient(
       colors = listOf(
@@ -321,7 +478,6 @@ fun DrawScope.drawPokemonBattlePlatform(
     size = ovalSize,
   )
 
-  // Inner Pokéball/Stadium Concentric Ring
   drawOval(
     color = primaryAccent.copy(alpha = 0.7f + pulsePhase * 0.25f),
     topLeft = topLeft,
@@ -337,9 +493,6 @@ fun DrawScope.drawPokemonBattlePlatform(
   )
 }
 
-/**
- * Classic Pokémon RPG Battle Status HUD Plate with Name, Level, Type Pill, HP Bar, and EXP Strip.
- */
 @Composable
 fun PokemonClassicStatusHud(
   name: String,
@@ -350,6 +503,7 @@ fun PokemonClassicStatusHud(
   maxHp: Int,
   accentColor: Color,
   gimmickLabel: String? = null,
+  statusLabel: String? = null,
   showNumericHp: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
@@ -405,6 +559,14 @@ fun PokemonClassicStatusHud(
         color = CyberCyan,
         fontWeight = FontWeight.Bold,
       )
+      if (!statusLabel.isNullOrBlank()) {
+        Text(
+          text = "[$statusLabel]",
+          style = MaterialTheme.typography.labelSmall,
+          color = ElectricCrimson,
+          fontWeight = FontWeight.Bold,
+        )
+      }
       if (!gimmickLabel.isNullOrBlank() && gimmickLabel != "None") {
         Text(
           text = "• $gimmickLabel",
@@ -416,7 +578,6 @@ fun PokemonClassicStatusHud(
       }
     }
 
-    // Authentic Beveled HP Frame: [HP | ████████]
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -465,59 +626,55 @@ fun PokemonClassicStatusHud(
   }
 }
 
-/**
- * Draws authentic GBA/NDS pixel-art terrain tiles via Canvas so overworld maps look
- * rich and unmistakable as a Pokémon RPG tilemap.
- */
 fun DrawScope.drawPokemonMapTile(tileType: Int) {
   val w = size.width
   val h = size.height
   when (tileType) {
     0 -> {
-      // SGB2/GBA Tall Wild Grass: layered green turf + 3 distinct grass blade tufts
-      drawRect(Color(0xFF14532D))
-      drawRect(color = Color(0xFF166534), topLeft = Offset(2f, 2f), size = Size(w - 4f, h - 4f))
-      val tufts = listOf(Offset(w * 0.25f, h * 0.72f), Offset(w * 0.55f, h * 0.65f), Offset(w * 0.78f, h * 0.78f))
+      // 0 = Meadow Plains
+      drawRect(Color(0xFF1C703D))
+      drawRect(color = Color(0xFF228248), topLeft = Offset(2f, 2f), size = Size(w - 4f, h - 4f))
+      drawCircle(Color(0xFFFDE047), radius = 2.4f, center = Offset(w * 0.65f, h * 0.35f))
+    }
+    1 -> {
+      // 1 = Tall Wild Grass
+      drawRect(Color(0xFF0E4425))
+      drawRect(color = Color(0xFF14532D), topLeft = Offset(2f, 2f), size = Size(w - 4f, h - 4f))
+      val tufts = listOf(Offset(w * 0.25f, h * 0.76f), Offset(w * 0.55f, h * 0.70f), Offset(w * 0.78f, h * 0.80f))
       tufts.forEach { base ->
         val path = Path().apply {
           moveTo(base.x - 4f, base.y)
-          lineTo(base.x, base.y - h * 0.34f)
+          lineTo(base.x, base.y - h * 0.38f)
           lineTo(base.x + 4f, base.y)
           close()
         }
         drawPath(path, color = Color(0xFF4ADE80))
       }
     }
-    1 -> {
-      // Dolphin TEV Surfable Ocean Water: deep blue + crisp white/cyan wave crests
+    2 -> {
+      // 2 = Water / Coast
       drawRect(Color(0xFF0369A1))
       drawLine(Color(0xFF38BDF8), Offset(w * 0.15f, h * 0.32f), Offset(w * 0.55f, h * 0.32f), strokeWidth = 2.5f)
       drawLine(Color(0xFFBAE6FD), Offset(w * 0.42f, h * 0.68f), Offset(w * 0.85f, h * 0.68f), strokeWidth = 2.5f)
     }
-    2 -> {
-      // Mode-7 Cobble / Route Path: warm slate pavers + gold route marker dash
+    3 -> {
+      // 3 = Route Road
       drawRect(Color(0xFF334155))
       drawRect(color = Color(0xFF475569), topLeft = Offset(2f, 2f), size = Size(w * 0.44f, h * 0.44f))
       drawRect(color = Color(0xFF475569), topLeft = Offset(w * 0.52f, h * 0.50f), size = Size(w * 0.44f, h * 0.44f))
       drawLine(SuperFxGold.copy(alpha = 0.7f), Offset(w * 0.15f, h * 0.5f), Offset(w * 0.85f, h * 0.5f), strokeWidth = 1.5f)
     }
-    3 -> {
-      // NDS 3D Gym Checkerboard + Poké Ball Emblem
-      drawRect(Color(0xFF312E81))
-      drawRect(Color(0xFF4338CA), Offset(0f, 0f), Size(w / 2f, h / 2f))
-      drawRect(Color(0xFF4338CA), Offset(w / 2f, h / 2f), Size(w / 2f, h / 2f))
-      drawCircle(Color(0xFFEF4444), radius = minOf(w, h) * 0.24f, center = Offset(w / 2f, h / 2f))
-      drawCircle(Color.White, radius = minOf(w, h) * 0.09f, center = Offset(w / 2f, h / 2f))
-    }
     4 -> {
-      // Super FX2 Magma Crater
+      // 4 = Volcanic Rift
       drawRect(Color(0xFF7F1D1D))
       drawCircle(Color(0xFFF97316), radius = minOf(w, h) * 0.28f, center = Offset(w * 0.5f, h * 0.5f))
       drawCircle(Color(0xFFFACC15), radius = minOf(w, h) * 0.12f, center = Offset(w * 0.5f, h * 0.5f))
     }
     else -> {
-      // Paldea Terastal Crystal Wall
-      drawRect(Color(0xFF0F172A))
+      // 5 = Prism Sanctuary / Gym Arena
+      drawRect(Color(0xFF1E1B4B))
+      drawRect(Color(0xFF312E81), Offset(0f, 0f), Size(w / 2f, h / 2f))
+      drawRect(Color(0xFF312E81), Offset(w / 2f, h / 2f), Size(w / 2f, h / 2f))
       val diamond = Path().apply {
         moveTo(w * 0.5f, h * 0.12f)
         lineTo(w * 0.84f, h * 0.5f)
@@ -530,3 +687,127 @@ fun DrawScope.drawPokemonMapTile(tileType: Int) {
     }
   }
 }
+
+fun parseHexColorSafe(hex: String, fallback: Color = CyberCyan): Color {
+  val clean = hex.trim().removePrefix("#")
+  return runCatching {
+    when (clean.length) {
+      6 -> Color(("FF$clean").toLong(16))
+      8 -> Color(clean.toLong(16))
+      else -> fallback
+    }
+  }.getOrDefault(fallback)
+}
+
+@Composable
+fun PokemonBattleStatusHud(
+  name: String,
+  level: Int,
+  primaryType: String,
+  secondaryType: String = "",
+  currentHp: Int,
+  maxHp: Int,
+  showNumericHp: Boolean,
+  statusLabel: String? = null,
+  gimmickLabel: String? = null,
+  modifier: Modifier = Modifier,
+) {
+  val safeMax = max(1, maxHp)
+  val hpRatio = (currentHp.toFloat() / safeMax.toFloat()).coerceIn(0f, 1f)
+  val hpColor = when {
+    hpRatio > 0.5f -> SgbEmerald
+    hpRatio > 0.22f -> SuperFxGold
+    else -> ElectricCrimson
+  }
+
+  Column(
+    modifier = modifier
+      .clip(RoundedCornerShape(10.dp))
+      .background(Color(0xD9090E1C))
+      .border(1.2.dp, Color(0xFF334155), RoundedCornerShape(10.dp))
+      .padding(horizontal = 9.dp, vertical = 7.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = name,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = StudioTextPrimary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f),
+      )
+      Spacer(modifier = Modifier.width(6.dp))
+      Text(
+        text = "Lv.$level",
+        fontFamily = PressStart2PFamily,
+        style = MaterialTheme.typography.labelSmall,
+        color = SuperFxGold,
+      )
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      val typeText = if (secondaryType.isNotBlank()) "$primaryType/$secondaryType" else primaryType
+      Text(
+        text = typeText.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        color = CyberCyan,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f),
+      )
+      if (!statusLabel.isNullOrBlank()) {
+        Text(
+          text = statusLabel,
+          style = MaterialTheme.typography.labelSmall,
+          color = SuperFxGold,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+        )
+      }
+    }
+
+    LinearProgressIndicator(
+      progress = { hpRatio },
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(7.dp)
+        .clip(RoundedCornerShape(4.dp)),
+      color = hpColor,
+      trackColor = Color(0xFF1E293B),
+    )
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = if (showNumericHp) "HP $currentHp / $safeMax" else "HP ${(hpRatio * 100).toInt()}%",
+        style = MaterialTheme.typography.labelSmall,
+        color = hpColor,
+        fontWeight = FontWeight.Bold,
+      )
+      if (!gimmickLabel.isNullOrBlank()) {
+        Text(
+          text = gimmickLabel,
+          style = MaterialTheme.typography.labelSmall,
+          color = Mode7Sky,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+  }
+}
+

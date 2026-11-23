@@ -50,6 +50,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.data.local.AtlasProgressEntity
+import com.example.data.local.AtlasSpeciesIndexItem
 import com.example.data.local.EncyclopediaEntryEntity
 import com.example.data.local.EncyclopediaSourceStatusEntity
 import com.example.data.local.NativePokemonEntity
@@ -72,6 +74,7 @@ fun FranchiseDexAndCreatorSection(
   customCloudDexState: UiState<List<CustomDexEntry>>,
   encyclopediaEntries: List<EncyclopediaEntryEntity>,
   encyclopediaSourceStatuses: List<EncyclopediaSourceStatusEntity>,
+  atlasProgressMap: Map<Int, AtlasProgressEntity>,
   selectedPrimary: NativePokemonEntity,
   selectedSecondary: NativePokemonEntity,
   searchQuery: String,
@@ -86,6 +89,8 @@ fun FranchiseDexAndCreatorSection(
   onCreateCustomPokemon: (NativePokemonEntity, Boolean) -> Unit,
   onDeleteCloudCustomDex: (String) -> Unit,
   onSyncEncyclopediaNow: () -> Unit,
+  onPlayAtlasSpeciesCry: (AtlasSpeciesIndexItem) -> Unit,
+  onHarmonizeSpecies: (Int) -> Unit,
 ) {
   var showCreateDialog by remember { mutableStateOf(false) }
   var pokeApiInput by remember { mutableStateOf("") }
@@ -118,7 +123,7 @@ fun FranchiseDexAndCreatorSection(
       FilterChip(
         selected = !showEncyclopediaMode,
         onClick = { showEncyclopediaMode = false },
-        label = { Text("Integrated Dex (${nativeList.size})") },
+        label = { Text("Resonance Atlas (#0001–#1025)") },
         modifier = Modifier.weight(1f).testTag("dex_mode_species"),
       )
       FilterChip(
@@ -138,6 +143,14 @@ fun FranchiseDexAndCreatorSection(
       )
       return@Column
     }
+
+    ResonanceAtlasDexCard(
+      atlasProgressMap = atlasProgressMap,
+      isSyncingPokeApi = isSyncingPokeApi,
+      onHydrateFromPokeApi = onImportFromPokeApi,
+      onPlaySpeciesCry = onPlayAtlasSpeciesCry,
+      onHarmonizeSpecies = onHarmonizeSpecies,
+    )
 
     // Header & Create Unique Species CTA
     Card(

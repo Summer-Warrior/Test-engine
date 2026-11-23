@@ -3,28 +3,26 @@ package com.example.data.local
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.example.data.remote.NetworkClientProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import kotlin.math.PI
 import kotlin.math.sin
 
 class FranchiseEncyclopediaAndResourceRepository(
   private val resourceDao: StudioResourceDao,
   private val encyclopediaDao: EncyclopediaDao,
+  private val httpClient: OkHttpClient = NetworkClientProvider.sharedOkHttpClient,
 ) {
-  private val httpClient = OkHttpClient.Builder()
-    .connectTimeout(8, TimeUnit.SECONDS)
-    .readTimeout(8, TimeUnit.SECONDS)
-    .followRedirects(true)
-    .build()
 
   val allResources: Flow<List<StudioResourceEntity>> = resourceDao.observeAllResources()
   val allEncyclopediaEntries: Flow<List<EncyclopediaEntryEntity>> = encyclopediaDao.observeAllEntries()
@@ -350,11 +348,16 @@ class FranchiseEncyclopediaAndResourceRepository(
         .setTransferMode(AudioTrack.MODE_STATIC)
         .build()
 
-      track.write(buffer, 0, buffer.size)
-      track.play()
-      Thread.sleep(durationMs.toLong() + 40L)
-      track.stop()
-      track.release()
+      try {
+        track.write(buffer, 0, buffer.size)
+        track.play()
+        delay(durationMs.toLong() + 40L)
+      } finally {
+        withContext(NonCancellable) {
+          runCatching { track.stop() }
+          runCatching { track.release() }
+        }
+      }
     }
   }
 }

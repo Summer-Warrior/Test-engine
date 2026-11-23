@@ -57,6 +57,7 @@ import com.example.engine.BattleGimmickMode
 import com.example.engine.BattleTurnField
 import com.example.engine.CampaignProgressionState
 import com.example.engine.CanonBattleResolver
+import com.example.engine.CanonRegionChapter
 import com.example.engine.CombatantSnapshot
 import com.example.engine.MasterCanonTemplateCatalog
 import com.example.engine.NatureModifier
@@ -79,10 +80,12 @@ import com.example.ui.theme.VoxelViolet
 fun CanonTemplateSandboxSection(
   attackerEntity: NativePokemonEntity,
   defenderEntity: NativePokemonEntity,
+  campaignState: CampaignProgressionState,
   isSavingProject: Boolean,
+  onCompleteChapter: (CanonRegionChapter) -> Unit,
+  onResetCampaign: () -> Unit,
   onProvisionMasterBaseProject: () -> Unit,
 ) {
-  var campaignState by remember { mutableStateOf(CampaignProgressionState()) }
   var selectedRegionId by remember { mutableStateOf(MasterCanonTemplateCatalog.worldChapters.first().id) }
 
   var selectedMove by remember { mutableStateOf(MasterCanonTemplateCatalog.signatureMovePool.first()) }
@@ -304,7 +307,7 @@ fun CanonTemplateSandboxSection(
               )
             }
             Text(
-              text = "Badges: ${campaignState.badgesEarned} • Ribbons: ${campaignState.animeRibbonsAndKeys} • WCS Rank #${campaignState.worldCoronationRank}",
+              text = "Shards: ${campaignState.harmonicShardsCollected}/14 • Badges: ${campaignState.badgesEarned} • Ribbons: ${campaignState.animeRibbonsAndKeys} • WCS Rank #${campaignState.worldCoronationRank}",
               style = MaterialTheme.typography.bodySmall,
               color = SuperFxGold,
               fontWeight = FontWeight.SemiBold,
@@ -312,7 +315,7 @@ fun CanonTemplateSandboxSection(
           }
 
           OutlinedButton(
-            onClick = { campaignState = CampaignProgressionState() },
+            onClick = onResetCampaign,
             modifier = Modifier
               .heightIn(min = 48.dp)
               .testTag("reset_campaign_graph_button"),
@@ -437,7 +440,7 @@ fun CanonTemplateSandboxSection(
           val canUnlock = campaignState.canUnlockChapter(activeChapter)
           val alreadyDone = activeChapter.id in campaignState.completedChapterIds
           Button(
-            onClick = { campaignState = campaignState.completeChapter(activeChapter) },
+            onClick = { onCompleteChapter(activeChapter) },
             enabled = canUnlock && !alreadyDone,
             colors = ButtonDefaults.buttonColors(
               containerColor = SgbEmerald,

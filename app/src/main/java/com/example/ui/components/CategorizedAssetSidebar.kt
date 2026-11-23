@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.example.data.local.NativePokemonEntity
+import com.example.data.local.SavedSpriteEntity
 import com.example.data.model.AssetCategory
 import com.example.data.model.ConsoleHardwareCatalog
 import com.example.data.model.CustomDexEntry
@@ -117,6 +118,9 @@ fun CategorizedAssetSidebar(
   onQuickSaveActiveProject: () -> Unit,
   onOpenProjectSwitcher: () -> Unit,
   onOpenProjectDashboard: () -> Unit,
+  savedSprites: List<SavedSpriteEntity> = emptyList(),
+  onLoadSavedSprite: ((SavedSpriteEntity) -> Unit)? = null,
+  isCompactDrawerMode: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val activeChipKeywords = remember(activeProject) {
@@ -229,7 +233,24 @@ fun CategorizedAssetSidebar(
         shaderFormula = cloudAsset.shaderFormula,
         isCustomCloud = true,
         cloudDocId = cloudAsset.id,
-        databaseTag = "PINNED",
+        projectId = cloudAsset.projectId,
+        databaseTag = if (cloudAsset.projectId.isNotBlank()) "PROJECT" else "GLOBAL",
+      )
+    }
+  }
+
+  val roomSpriteAssets = remember(savedSprites) {
+    savedSprites.map { spr ->
+      BuiltInAssetItem(
+        id = "room_spr_${spr.id}",
+        name = spr.name,
+        category = AssetCategory.SPRITES,
+        consoleLineage = "Room Saved 16×16 (${spr.frameCount}f)",
+        chipAddon = "PPU Voxel Rig",
+        spriteSeedId = spr.spriteSeedId,
+        shaderFormula = "ROOM_SAVED_SPRITE|${spr.id}",
+        projectId = spr.projectId,
+        databaseTag = "SAVED",
       )
     }
   }
@@ -238,13 +259,16 @@ fun CategorizedAssetSidebar(
 
   val displayedAssets = remember(
     allCloudAssets,
+    roomSpriteAssets,
     integratedDatabaseAssets,
     selectedCategory,
     searchQuery,
     filterByActiveProject,
     activeChipKeywords,
+    activeProject?.id,
   ) {
     val combinedPool = buildList {
+      addAll(roomSpriteAssets)
       addAll(allCloudAssets)
       addAll(StudioViewModel.builtInSidebarAssets)
       addAll(integratedDatabaseAssets)
@@ -265,11 +289,13 @@ fun CategorizedAssetSidebar(
       combinedPool.filter { it.category == selectedCategory }
     }
 
-    if (filterByActiveProject && activeChipKeywords.isNotEmpty()) {
+    val activeId = activeProject?.id.orEmpty()
+    if (filterByActiveProject && activeId.isNotBlank()) {
       val matched = searchFiltered.filter { item ->
-        item.isCustomCloud || activeChipKeywords.any { key ->
-          item.chipAddon.lowercase().contains(key) || item.consoleLineage.lowercase().contains(key)
-        }
+        item.projectId == activeId ||
+          (item.projectId.isBlank() && activeChipKeywords.any { key ->
+            item.chipAddon.lowercase().contains(key) || item.consoleLineage.lowercase().contains(key)
+          })
       }
       if (!isSearching) matched.ifEmpty { searchFiltered } else matched
     } else {
@@ -576,7 +602,19 @@ fun CategorizedAssetSidebar(
                   accentColor = categoryAccentColor(asset.category),
                   matchesActiveProject = matchesActiveProject,
                   showCategoryTag = isSearching,
-                  onClick = { onSelectAsset(asset) },
+                  onClick = {
+                    if (asset.id.startsWith("room_spr_")) {
+                      val sprId = asset.id.removePrefix("room_spr_")
+                      val match = savedSprites.firstOrNull { it.id == sprId }
+                      if (match != null && onLoadSavedSprite != null) {
+                        onLoadSavedSprite(match)
+                      } else {
+                        onSelectAsset(asset)
+                      }
+                    } else {
+                      onSelectAsset(asset)
+                    }
+                  },
                   onDelete = if (asset.isCustomCloud && asset.id.startsWith("cloud_") && !asset.id.startsWith("cloud_dex_")) {
                     { onDeleteCustomAsset(asset.cloudDocId) }
                   } else {

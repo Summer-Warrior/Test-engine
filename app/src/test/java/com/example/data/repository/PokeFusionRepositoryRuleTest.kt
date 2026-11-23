@@ -46,9 +46,21 @@ class PokeFusionRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val aliceUid = signInTestUser(ALICE_EMAIL)
     val repository = PokeFusionCloudRepository(firestore, auth)
 
+    val gameId = withTimeout(DEFAULT_TIMEOUT_MS) {
+      repository.createFanGame(
+        FanGameProject(
+          title = "Pokemon: Prism Resonance",
+          regionName = "14-Region Nexus",
+          synopsis = "Full 14-region convergence master template.",
+          activeChipsCsv = "ALL_ON_RECORD|" + (1..45).joinToString(",") { "hw_$it" },
+        )
+      ).getOrThrow()
+    }
+
     val dexId = withTimeout(DEFAULT_TIMEOUT_MS) {
       repository.createCustomDexEntry(
         CustomDexEntry(
+          projectId = gameId,
           dexNumber = 1026L,
           name = "Chromawyrm",
           primaryType = "Dragon",
@@ -62,6 +74,7 @@ class PokeFusionRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val assetId = withTimeout(DEFAULT_TIMEOUT_MS) {
       repository.createCustomAsset(
         CustomStudioAsset(
+          projectId = gameId,
           name = "SGB2 + 32X Voxel Gym Tile",
           category = "Tilesets",
         )
@@ -72,7 +85,12 @@ class PokeFusionRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val dexList = withTimeout(FLOW_TIMEOUT_MS) {
       repository.observeCustomDex(aliceUid).first { list -> list.any { it.id == dexId } }
     }
-    assertTrue(dexList.any { it.name == "Chromawyrm" })
+    assertTrue(dexList.any { it.name == "Chromawyrm" && it.projectId == gameId })
+
+    val assetList = withTimeout(FLOW_TIMEOUT_MS) {
+      repository.observeCustomAssets(aliceUid).first { list -> list.any { it.id == assetId } }
+    }
+    assertTrue(assetList.any { it.id == assetId && it.projectId == gameId })
   }
 
   @Test

@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.BuildConfig
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -33,19 +34,21 @@ fun handleFirestoreError(
   }
   val currentUser = auth?.currentUser
 
-  val providerInfoList = currentUser?.providerData?.map { provider ->
-    JSONObject().apply {
-      put("providerId", provider.providerId)
-      put("email", provider.email)
-    }
-  } ?: emptyList()
-
   val authInfoJson = JSONObject().apply {
-    put("userId", currentUser?.uid)
-    put("email", currentUser?.email)
-    put("emailVerified", currentUser?.isEmailVerified)
-    put("tenantId", currentUser?.tenantId)
-    put("providerInfo", JSONArray(providerInfoList))
+    put("isAuthenticated", currentUser != null)
+    if (BuildConfig.DEBUG) {
+      val providerInfoList = currentUser?.providerData?.map { provider ->
+        JSONObject().apply {
+          put("providerId", provider.providerId)
+          put("email", provider.email)
+        }
+      } ?: emptyList()
+      put("userId", currentUser?.uid)
+      put("email", currentUser?.email)
+      put("emailVerified", currentUser?.isEmailVerified)
+      put("tenantId", currentUser?.tenantId)
+      put("providerInfo", JSONArray(providerInfoList))
+    }
   }
 
   val errorInfoJson = JSONObject().apply {
