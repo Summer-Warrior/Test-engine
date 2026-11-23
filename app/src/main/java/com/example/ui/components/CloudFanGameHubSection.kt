@@ -20,14 +20,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -59,8 +60,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.ConsoleFusionConfig
-import com.example.data.model.ConsoleHardwareCatalog
 import com.example.data.model.FanGameProject
+import com.example.engine.HardwarePlatformSpec
+import com.example.engine.UniversalHardwareRegistry
 import com.example.ui.UiState
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
@@ -74,11 +76,13 @@ import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
 fun CloudFanGameHubSection(
   cloudGamesState: UiState<List<FanGameProject>>,
+  allHardwarePlatforms: List<HardwarePlatformSpec>,
   activeProject: FanGameProject?,
   currentFusionConfig: ConsoleFusionConfig,
   hasUnsavedChanges: Boolean,
@@ -112,6 +116,8 @@ fun CloudFanGameHubSection(
   onSeedStarterGames: () -> Unit,
   onProvisionMasterTemplate: () -> Unit,
   onDeleteGame: (String) -> Unit,
+  onExportActiveProjectJson: () -> Unit,
+  onImportProjectJson: () -> Unit,
 ) {
   var showNewGameDialog by remember { mutableStateOf(false) }
   var editingProject by remember { mutableStateOf<FanGameProject?>(null) }
@@ -121,7 +127,7 @@ fun CloudFanGameHubSection(
     modifier = Modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
-    // Cloud Project Manager Hero Card
+    // Local Studio Vault Hero Card
     Card(
       modifier = Modifier
         .fillMaxWidth()
@@ -132,7 +138,7 @@ fun CloudFanGameHubSection(
       Column(modifier = Modifier.padding(14.dp)) {
         Image(
           painter = painterResource(id = R.drawable.img_cloud_hub_banner_1794570185388),
-          contentDescription = "Google Cloud Project Manager Banner",
+          contentDescription = "Local Studio Vault Banner",
           modifier = Modifier
             .fillMaxWidth()
             .height(132.dp)
@@ -151,20 +157,20 @@ fun CloudFanGameHubSection(
           Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(
-                imageVector = Icons.Default.CloudDone,
-                contentDescription = "Synced with Firestore",
+                imageVector = Icons.Default.Storage,
+                contentDescription = "Local Studio Vault Offline Room DB",
                 tint = CyberCyan,
                 modifier = Modifier.size(16.dp),
               )
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "FIRESTORE PROJECT MANAGER",
+                text = "LOCAL STUDIO VAULT • OFFLINE ROOM DB",
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberCyan,
               )
             }
             Text(
-              text = "Create, Save & Switch Fan Game Projects",
+              text = "Create, Save, Export & Switch Projects",
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
             )
@@ -186,6 +192,38 @@ fun CloudFanGameHubSection(
             Icon(imageVector = Icons.Default.Add, contentDescription = "Create New Project")
             Spacer(modifier = Modifier.width(4.dp))
             Text("New", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+          }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          OutlinedButton(
+            onClick = onExportActiveProjectJson,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+              .weight(1f)
+              .heightIn(min = 48.dp)
+              .testTag("vault_export_json_button"),
+          ) {
+            Icon(Icons.Default.FileUpload, contentDescription = null, tint = SuperFxGold, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Export Project (.json)", color = SuperFxGold, fontWeight = FontWeight.Bold, maxLines = 1)
+          }
+          OutlinedButton(
+            onClick = onImportProjectJson,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+              .weight(1f)
+              .heightIn(min = 48.dp)
+              .testTag("vault_import_json_button"),
+          ) {
+            Icon(Icons.Default.FileDownload, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Import Project (.json)", color = CyberCyan, fontWeight = FontWeight.Bold, maxLines = 1)
           }
         }
       }
@@ -260,7 +298,7 @@ fun CloudFanGameHubSection(
         ) {
           Column(modifier = Modifier.padding(16.dp)) {
             Text(
-              text = "Firestore Sync Alert",
+              text = "Local Vault Notice",
               style = MaterialTheme.typography.titleMedium,
               color = MaterialTheme.colorScheme.error,
               fontWeight = FontWeight.Bold,
@@ -321,6 +359,7 @@ fun CloudFanGameHubSection(
               val isActive = activeProject?.id == game.id
               CloudFanGameCard(
                 project = game,
+                allHardwarePlatforms = allHardwarePlatforms,
                 isActive = isActive,
                 hasUnsavedChanges = isActive && hasUnsavedChanges,
                 isSavingProject = isSavingProject,
@@ -368,7 +407,7 @@ fun CloudFanGameHubSection(
       containerColor = StudioCardDark,
       title = {
         Text(
-          text = "Delete Cloud Project?",
+          text = "Delete Local Vault Project?",
           style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
           color = ElectricCrimson,
@@ -376,7 +415,7 @@ fun CloudFanGameHubSection(
       },
       text = {
         Text(
-          text = "This permanently removes \"${target.title}\" (${target.versionTag}) from your Firestore vault.",
+          text = "This permanently removes \"${target.title}\" (${target.versionTag}) from your Local Room DB vault.",
           style = MaterialTheme.typography.bodyMedium,
           color = StudioTextSecondary,
         )
@@ -504,7 +543,7 @@ private fun ActiveWorkspaceProjectBanner(
             }
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-              text = if (hasUnsavedChanges) "Save Changes to Cloud" else "Save Snapshot",
+              text = if (hasUnsavedChanges) "Save Changes to Vault" else "Save Snapshot",
               fontWeight = FontWeight.Bold,
             )
           }
@@ -544,7 +583,7 @@ private fun ActiveWorkspaceProjectBanner(
               color = SuperFxGold,
             )
             Text(
-              text = "Select a project below or save your current engine state as a new cloud project.",
+              text = "Select a project below or save your current engine state as a new local vault project.",
               style = MaterialTheme.typography.bodyMedium,
               color = StudioTextSecondary,
             )
@@ -588,13 +627,13 @@ private fun EmptyProjectsVaultCard(
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Icon(
-        imageVector = Icons.Default.CloudUpload,
-        contentDescription = "Empty Firestore Vault",
+        imageVector = Icons.Default.Storage,
+        contentDescription = "Empty Local Studio Vault",
         tint = SuperFxGold,
         modifier = Modifier.size(36.dp),
       )
       Text(
-        text = "Your Firestore Project Vault is Empty",
+        text = "Your Local Studio Vault is Empty",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
       )
@@ -642,6 +681,7 @@ private fun EmptyProjectsVaultCard(
 @Composable
 private fun CloudFanGameCard(
   project: FanGameProject,
+  allHardwarePlatforms: List<HardwarePlatformSpec>,
   isActive: Boolean,
   hasUnsavedChanges: Boolean,
   isSavingProject: Boolean,
@@ -652,16 +692,8 @@ private fun CloudFanGameCard(
   onDuplicate: () -> Unit,
   onDelete: () -> Unit,
 ) {
-  val chipLabels = remember(project.activeChipsCsv) {
-    val catalog = ConsoleHardwareCatalog.officialAndFanChips
-    project.activeChipsCsv.split(",")
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      .map { token ->
-        catalog.firstOrNull {
-          it.id.equals(token, ignoreCase = true) || it.name.contains(token, ignoreCase = true)
-        }?.name?.substringBefore(" (") ?: token
-      }
+  val (_, chipLabels) = remember(project.activeChipsCsv, allHardwarePlatforms) {
+    UniversalHardwareRegistry.formatReadableHardwareSummary(project.activeChipsCsv, allHardwarePlatforms)
   }
 
   Card(
@@ -903,7 +935,8 @@ private fun CloudFanGameCard(
 }
 
 private fun formatProjectTimestamp(project: FanGameProject): String {
-  val date = project.updatedAt?.toDate() ?: project.createdAt?.toDate() ?: return "Just synced"
+  val ms = if (project.updatedAtMs > 0L) project.updatedAtMs else project.createdAtMs
+  if (ms <= 0L) return "Saved locally"
   val formatter = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
-  return "Saved ${formatter.format(date)}"
+  return "Saved ${formatter.format(Date(ms))}"
 }

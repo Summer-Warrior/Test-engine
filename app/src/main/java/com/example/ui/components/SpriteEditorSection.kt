@@ -106,7 +106,7 @@ fun SpriteEditorSection(
   onSelectTool: (SpriteToolMode) -> Unit,
   onSelectColorSlot: (Int) -> Unit,
   onUpdatePaletteSlot: (Int, Long) -> Unit,
-  onApplyPresetPalette: (String) -> Unit,
+  onApplyPresetPaletteValues: (List<Long>) -> Unit,
   onUpdateSpriteName: (String) -> Unit,
   onToggleMirrorX: () -> Unit,
   onToggleShowGrid: () -> Unit,
@@ -495,17 +495,13 @@ fun SpriteEditorSection(
           selectedSlotIndex = editorState.selectedColorSlot,
           onSelectSlot = onSelectColorSlot,
           onUpdatePalette = { updatedList ->
-            val slot = editorState.selectedColorSlot.coerceIn(0, (updatedList.size - 1).coerceAtLeast(0))
-            if (updatedList != editorState.paletteArgb) {
-              // Check if a full preset was applied (>1 slot changed)
-              val changedSlots = updatedList.indices.filter { idx -> updatedList[idx] != editorState.paletteArgb.getOrNull(idx) }
-              if (changedSlots.size == 1) {
-                onUpdatePaletteSlot(changedSlots.first(), updatedList[changedSlots.first()])
-              } else {
-                changedSlots.forEach { idx -> onUpdatePaletteSlot(idx, updatedList[idx]) }
-              }
-            } else {
-              onUpdatePaletteSlot(slot, updatedList[slot])
+            val changedSlots = updatedList.indices.filter { idx ->
+              updatedList[idx] != editorState.paletteArgb.getOrNull(idx)
+            }
+            when {
+              changedSlots.size == 1 -> onUpdatePaletteSlot(changedSlots.first(), updatedList[changedSlots.first()])
+              changedSlots.size > 1 -> onApplyPresetPaletteValues(updatedList)
+              else -> Unit
             }
           },
         )
@@ -525,7 +521,7 @@ fun SpriteEditorSection(
           ) {
             Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(if (isSaving) "Saving..." else "Save to Room & Cloud", fontWeight = FontWeight.Bold)
+            Text(if (isSaving) "Saving..." else "Save to Local Vault", fontWeight = FontWeight.Bold)
           }
           OutlinedButton(
             onClick = {

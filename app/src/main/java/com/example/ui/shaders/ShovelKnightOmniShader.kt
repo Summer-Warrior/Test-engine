@@ -3,7 +3,9 @@ package com.example.ui.shaders
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.engine.ConvergedVisualParams
@@ -11,14 +13,16 @@ import com.example.engine.ConvergedVisualParams
 /**
  * Shovel Knight+ Unified 2D/3D Entity Shader (Android 13+ / API 33+ AGSL RuntimeShader).
  *
- * Replaces multi-copy AsyncImage shadow hacks with a single GPU pass that:
+ * Compiles RuntimeShader ONCE per composable instance via Modifier.composed + remember {}
+ * and updates only lightweight float uniforms inside graphicsLayer to maintain smooth 60fps.
+ *
  * 1) Snaps both 3D renders and 2D sprites onto a shared virtual pixel grid
  * 2) Draws a crisp 1-virtual-pixel #0E1125 dark ink silhouette outline via 4-neighbor alpha check
- * 3) Quantizes shading into hue-shifted cel bands with 4x4 Bayer ordered dithering (pure arithmetic, zero non-constant array indexing)
+ * 3) Quantizes shading into hue-shifted cel bands with 4x4 Bayer ordered dithering (pure arithmetic)
  * 4) Adds a 1-texel directional top-left rim light
  * 5) Adds pixel-snapped Terastal / PBR crystal glints
  *
- * On API 24-32, gracefully falls back to clean hardware-accelerated graphicsLayer rendering.
+ * On API 24-32, gracefully falls back to hardware-accelerated graphicsLayer rendering.
  */
 object ShovelKnightOmniShader {
   // Strictly AGSL-compliant: zero non-constant array indexing!
@@ -109,7 +113,8 @@ object ShovelKnightOmniShader {
     }
   """
 
-  fun createRenderEffect(
+  fun applyUniformsAndBuildEffect(
+    shader: RuntimeShader,
     widthPx: Float,
     heightPx: Float,
     visuals: ConvergedVisualParams,
@@ -120,7 +125,6 @@ object ShovelKnightOmniShader {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
     if (widthPx <= 1f || heightPx <= 1f) return null
     return runCatching {
-      val shader = RuntimeShader(AGSL_SOURCE)
       shader.setFloatUniform("resolution", widthPx, heightPx)
       shader.setFloatUniform("virtualGrid", visuals.virtualPixelGrid.coerceIn(64f, 208f))
       shader.setFloatUniform("outlineWeight", visuals.outlineWeight.coerceIn(0f, 1f))
@@ -142,13 +146,27 @@ fun Modifier.shovelKnightEntityEffect(
   timeSec: Float,
   crystalGlint: Float = 0.25f,
   hitFlash: Boolean = false,
-): Modifier = this.graphicsLayer {
-  renderEffect = ShovelKnightOmniShader.createRenderEffect(
-    widthPx = if (widthPx > 1f) widthPx else size.width,
-    heightPx = if (heightPx > 1f) heightPx else size.height,
-    visuals = visuals,
-    timeSec = timeSec,
-    crystalGlint = crystalGlint,
-    hitFlash = hitFlash,
-  )
+): Modifier = composed {
+  val cachedShader = remember {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      runCatching { RuntimeShader(ShovelKnightOmniShader.AGSL_SOURCE) }.getOrNull()
+    } else {
+      null
+    }
+  }
+  this.graphicsLayer {
+    renderEffect = if (cachedShader != null) {
+      ShovelKnightOmniShader.applyUniformsAndBuildEffect(
+        shader = cachedShader,
+        widthPx = if (widthPx > 1f) widthPx else size.width,
+        heightPx = if (heightPx > 1f) heightPx else size.height,
+        visuals = visuals,
+        timeSec = timeSec,
+        crystalGlint = crystalGlint,
+        hitFlash = hitFlash,
+      )
+    } else {
+      null
+    }
+  }
 }

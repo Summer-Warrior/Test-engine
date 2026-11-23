@@ -1,22 +1,15 @@
 package com.example.data.local
 
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
 import com.example.data.remote.NetworkClientProvider
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.UUID
-import kotlin.math.PI
-import kotlin.math.sin
 
 class FranchiseEncyclopediaAndResourceRepository(
   private val resourceDao: StudioResourceDao,
@@ -299,65 +292,5 @@ class FranchiseEncyclopediaAndResourceRepository(
       )
     )
     false
-  }
-
-  /**
-   * Generates a crisp zero-permission retro square/sine chiptune tone preview for SFX & BGM assets.
-   */
-  suspend fun playRetroAudioPreview(resource: StudioResourceEntity) = withContext(Dispatchers.Default) {
-    runCatching {
-      val sampleRate = 22050
-      val isBgm = resource.categoryId == ResourceCategory.BGM.id
-      val durationMs = if (isBgm) 650 else 320
-      val totalSamples = (sampleRate * durationMs) / 1000
-      val buffer = ShortArray(totalSamples)
-      val baseFreq = resource.frequencyHz.coerceIn(180, 1200).toDouble()
-
-      for (i in 0 until totalSamples) {
-        val progress = i.toDouble() / totalSamples
-        val freq = if (isBgm) {
-          when {
-            progress < 0.33 -> baseFreq
-            progress < 0.66 -> baseFreq * 1.25
-            else -> baseFreq * 1.5
-          }
-        } else {
-          baseFreq * (1.0 + progress * 0.45)
-        }
-        val env = (1.0 - progress).coerceIn(0.0, 1.0)
-        val raw = sin(2.0 * PI * freq * i / sampleRate)
-        val shaped = if (isBgm) raw else if (raw >= 0) 0.7 else -0.7
-        buffer[i] = (shaped * env * Short.MAX_VALUE * 0.25).toInt().toShort()
-      }
-
-      val track = AudioTrack.Builder()
-        .setAudioAttributes(
-          AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-        )
-        .setAudioFormat(
-          AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .build()
-        )
-        .setBufferSizeInBytes(buffer.size * 2)
-        .setTransferMode(AudioTrack.MODE_STATIC)
-        .build()
-
-      try {
-        track.write(buffer, 0, buffer.size)
-        track.play()
-        delay(durationMs.toLong() + 40L)
-      } finally {
-        withContext(NonCancellable) {
-          runCatching { track.stop() }
-          runCatching { track.release() }
-        }
-      }
-    }
   }
 }

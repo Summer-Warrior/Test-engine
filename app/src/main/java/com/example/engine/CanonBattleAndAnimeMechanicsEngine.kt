@@ -288,6 +288,7 @@ object CanonBattleResolver {
     defender: CombatantSnapshot,
     move: BattleMoveSpec,
     field: BattleTurnField,
+    defenderMovePriority: Int = 0,
   ): BattleResolutionResult {
     val steps = mutableListOf<String>()
     val defenderMaxHp = defender.maxHp()
@@ -297,13 +298,13 @@ object CanonBattleResolver {
     val defSpeed = defender.effectiveStat("SPE") * (if (field.isTailwindDefender) 2 else 1)
     val attackerFirst = resolveTurnOrder(
       atkPriority = move.priority,
-      defPriority = 0,
+      defPriority = defenderMovePriority,
       atkSpeed = atkSpeed,
       defSpeed = defSpeed,
       isTrickRoom = field.isTrickRoomActive,
       speedTieSeed = field.speedTieSeed,
     )
-    steps.add("Speed Check: ${attacker.name} ($atkSpeed SPE, Prio ${move.priority}) vs ${defender.name} ($defSpeed SPE) -> ${if (attackerFirst) attacker.name else defender.name} moves first")
+    steps.add("Speed Check: ${attacker.name} ($atkSpeed SPE, Prio ${move.priority}) vs ${defender.name} ($defSpeed SPE, Prio $defenderMovePriority) -> ${if (attackerFirst) attacker.name else defender.name} moves first")
 
     // 2. Grounded checks & Psychic Terrain priority immunity
     val attackerGrounded = attacker.isGrounded(field.isGravityActive)

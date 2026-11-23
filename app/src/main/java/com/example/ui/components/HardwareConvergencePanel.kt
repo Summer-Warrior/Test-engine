@@ -10,9 +10,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -60,7 +63,7 @@ import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
 
 /**
- * Interactive Universal Hardware Registry Panel (85+ Gaming Platforms, 1962-2026).
+ * Interactive Universal Hardware Registry Panel (156 Gaming Platforms, 1962-2026).
  * Every toggle, discipline mode, and quick-select button feeds HardwareConvergenceSolver
  * and AudioConvergenceSolver in real time.
  */
@@ -79,7 +82,6 @@ fun HardwareConvergencePanel(
 ) {
   var searchQuery by remember { mutableStateOf("") }
   var selectedCategory by remember { mutableStateOf("All") }
-  var showFullRegistryList by remember { mutableStateOf(false) }
 
   val categories = remember(allPlatforms) {
     listOf("All") + allPlatforms.map { it.category }.distinct().sorted()
@@ -237,92 +239,83 @@ fun HardwareConvergencePanel(
         }
       }
 
-      val visibleList = if (showFullRegistryList || searchQuery.isNotBlank() || selectedCategory != "All") {
-        filteredPlatforms
-      } else {
-        filteredPlatforms.take(10)
-      }
+      Text(
+        text = "Showing ${filteredPlatforms.size} of ${allPlatforms.size} Platforms (scroll list to toggle any hardware)",
+        style = MaterialTheme.typography.labelSmall,
+        color = VoxelViolet,
+        fontWeight = FontWeight.SemiBold,
+      )
 
-      visibleList.forEach { spec ->
-        val isActive = spec.id in activePlatformIds
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (isActive) CyberCyan.copy(alpha = 0.10f) else StudioDeepNavy)
-            .border(
-              width = if (isActive) 1.5.dp else 1.dp,
-              color = if (isActive) CyberCyan else StudioBorderDark,
-              shape = RoundedCornerShape(12.dp),
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(min = 180.dp, max = 420.dp)
+          .clip(RoundedCornerShape(12.dp))
+          .background(StudioDeepNavy.copy(alpha = 0.65f))
+          .padding(6.dp)
+          .testTag("hardware_registry_lazy_list"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(filteredPlatforms, key = { it.id }) { spec ->
+          val isActive = spec.id in activePlatformIds
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(12.dp))
+              .background(if (isActive) CyberCyan.copy(alpha = 0.12f) else StudioDeepNavy)
+              .border(
+                width = if (isActive) 1.5.dp else 1.dp,
+                color = if (isActive) CyberCyan else StudioBorderDark,
+                shape = RoundedCornerShape(12.dp),
+              )
+              .clickable { onTogglePlatform(spec.id) }
+              .padding(10.dp)
+              .testTag("hardware_row_${spec.id}"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.CheckCircle,
+              contentDescription = if (isActive) "${spec.name} Active" else "${spec.name} Inactive",
+              tint = if (isActive) SgbEmerald else StudioBorderDark,
+              modifier = Modifier.size(20.dp),
             )
-            .clickable { onTogglePlatform(spec.id) }
-            .padding(10.dp)
-            .testTag("hardware_row_${spec.id}"),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Default.CheckCircle,
-            contentDescription = if (isActive) "${spec.name} Active" else "${spec.name} Inactive",
-            tint = if (isActive) SgbEmerald else StudioBorderDark,
-            modifier = Modifier.size(20.dp),
-          )
-          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Text(
+                  text = "${spec.name} (${spec.year})",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = StudioTextPrimary,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.weight(1f),
+                )
+                Text(
+                  text = spec.generation,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = SuperFxGold,
+                )
+              }
               Text(
-                text = "${spec.name} (${spec.year})",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = StudioTextPrimary,
+                text = "${spec.gpuChip} • ${spec.audioChip}",
+                style = MaterialTheme.typography.labelSmall,
+                color = CyberCyan,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
               )
               Text(
-                text = spec.generation,
+                text = "Honors: ${spec.honoredSignature} | Breaks: ${spec.brokenLimitation}",
                 style = MaterialTheme.typography.labelSmall,
-                color = SuperFxGold,
+                color = StudioTextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
               )
             }
-            Text(
-              text = "${spec.gpuChip} • ${spec.audioChip}",
-              style = MaterialTheme.typography.labelSmall,
-              color = CyberCyan,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = "Honors: ${spec.honoredSignature} | Breaks: ${spec.brokenLimitation}",
-              style = MaterialTheme.typography.labelSmall,
-              color = StudioTextSecondary,
-              maxLines = 2,
-              overflow = TextOverflow.Ellipsis,
-            )
           }
-        }
-      }
-
-      if (filteredPlatforms.size > visibleList.size) {
-        OutlinedButton(
-          onClick = { showFullRegistryList = true },
-          modifier = Modifier
-            .fillMaxWidth()
-            .defaultMinSize(minHeight = 48.dp)
-            .testTag("hardware_show_all_list_button"),
-        ) {
-          Text("Show All ${filteredPlatforms.size} Hardware Platforms", color = VoxelViolet, fontWeight = FontWeight.Bold)
-        }
-      } else if (showFullRegistryList && searchQuery.isBlank() && selectedCategory == "All") {
-        OutlinedButton(
-          onClick = { showFullRegistryList = false },
-          modifier = Modifier
-            .fillMaxWidth()
-            .defaultMinSize(minHeight = 48.dp),
-        ) {
-          Text("Collapse Registry List", color = CyberCyan)
         }
       }
     }

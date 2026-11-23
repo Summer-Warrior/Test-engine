@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -145,6 +148,7 @@ fun FranchiseDexAndCreatorSection(
     }
 
     ResonanceAtlasDexCard(
+      nativeList = nativeList,
       atlasProgressMap = atlasProgressMap,
       isSyncingPokeApi = isSyncingPokeApi,
       onHydrateFromPokeApi = onImportFromPokeApi,
@@ -267,12 +271,12 @@ fun FranchiseDexAndCreatorSection(
       }
     }
 
-    // Cloud-Synced Custom Species / Fakemon Section
+    // Local Room Vault Custom Species / Fakemon Section
     when (customCloudDexState) {
       is UiState.Loading -> {}
       is UiState.Error -> {
         Text(
-          text = "Cloud Custom Dex notice: ${customCloudDexState.message}",
+          text = "Local Custom Dex notice: ${customCloudDexState.message}",
           color = MaterialTheme.colorScheme.error,
           style = MaterialTheme.typography.bodySmall,
         )
@@ -280,7 +284,7 @@ fun FranchiseDexAndCreatorSection(
       is UiState.Success -> {
         if (customCloudDexState.data.isNotEmpty()) {
           Text(
-            text = "YOUR GOOGLE CLOUD CUSTOM SPECIES (${customCloudDexState.data.size})",
+            text = "YOUR LOCAL ROOM VAULT CUSTOM SPECIES (${customCloudDexState.data.size})",
             style = MaterialTheme.typography.labelLarge,
             color = SuperFxGold,
           )
@@ -321,21 +325,32 @@ fun FranchiseDexAndCreatorSection(
       }
     }
 
-    // Native Integrated Franchise Database List
+    // Native Integrated Franchise Database List (Bounded LazyColumn for 60fps scrolling)
     Text(
       text = "NATIVE FRANCHISE DATABASE (${filteredPokemon.size} SPECIES READY)",
       style = MaterialTheme.typography.labelLarge,
       color = CyberCyan,
     )
 
-    filteredPokemon.forEach { pokemon ->
-      NativePokemonCard(
-        pokemon = pokemon,
-        isPrimary = pokemon.dexNumber == selectedPrimary.dexNumber && pokemon.name == selectedPrimary.name,
-        isSecondary = pokemon.dexNumber == selectedSecondary.dexNumber && pokemon.name == selectedSecondary.name,
-        onSelectPrimary = { onSelectPrimary(pokemon) },
-        onSelectSecondary = { onSelectSecondary(pokemon) },
-      )
+    LazyColumn(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 240.dp, max = 560.dp)
+        .clip(RoundedCornerShape(14.dp))
+        .background(StudioDeepNavy.copy(alpha = 0.6f))
+        .padding(6.dp)
+        .testTag("native_dex_lazy_list"),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      items(filteredPokemon, key = { "${it.dexNumber}_${it.name}" }) { pokemon ->
+        NativePokemonCard(
+          pokemon = pokemon,
+          isPrimary = pokemon.dexNumber == selectedPrimary.dexNumber && pokemon.name == selectedPrimary.name,
+          isSecondary = pokemon.dexNumber == selectedSecondary.dexNumber && pokemon.name == selectedSecondary.name,
+          onSelectPrimary = { onSelectPrimary(pokemon) },
+          onSelectSecondary = { onSelectSecondary(pokemon) },
+        )
+      }
     }
   }
 
@@ -719,7 +734,7 @@ private fun CreateUniquePokemonDialog(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Text(
-            text = "Sync to Google Cloud Custom Dex",
+            text = "Pin to Local Room Custom Dex Vault",
             style = MaterialTheme.typography.bodyMedium,
             color = StudioTextPrimary,
           )

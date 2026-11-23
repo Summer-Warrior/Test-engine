@@ -163,9 +163,12 @@ enum class StudioSfxType(val id: String, val label: String) {
 class OmniHardwareAudioEngine {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val bgmMutex = Mutex()
-  private var activeBgmTrack: AudioTrack? = null
+  private val trackLock = Any()
+
+  @Volatile private var activeBgmTrack: AudioTrack? = null
   private var activeBgmJob: Job? = null
-  private var activeBgmThemeId: String? = null
+
+  @Volatile private var activeBgmThemeId: String? = null
 
   @Volatile var isMuted: Boolean = false
     private set
@@ -180,8 +183,15 @@ class OmniHardwareAudioEngine {
   )
 
   fun setMuted(muted: Boolean) {
+    val wasMuted = isMuted
     isMuted = muted
     applyTrackVolume()
+    if (wasMuted && !muted) {
+      val themeId = activeBgmThemeId
+      if (themeId != null && activeBgmTrack == null) {
+        playBgm(BgmThemeId.fromId(themeId))
+      }
+    }
   }
 
   fun setMasterVolume(volume: Float) {
@@ -193,14 +203,16 @@ class OmniHardwareAudioEngine {
     val changed = params != activeAudioParams
     activeAudioParams = params
     val currentTheme = activeBgmThemeId
-    if (changed && currentTheme != null && activeBgmTrack != null) {
+    if (changed && currentTheme != null && !isMuted) {
       playBgm(BgmThemeId.fromId(currentTheme))
     }
   }
 
   private fun applyTrackVolume() {
     val gain = if (isMuted) 0f else masterVolume
-    runCatching { activeBgmTrack?.setVolume(gain) }
+    synchronized(trackLock) {
+      runCatching { activeBgmTrack?.setVolume(gain) }
+    }
   }
 
   fun playBgm(theme: BgmThemeId) {
@@ -236,7 +248,9 @@ class OmniHardwareAudioEngine {
           track.setLoopPoints(0, frameCount, -1)
           track.setVolume(if (isMuted) 0f else masterVolume)
           track.play()
-          activeBgmTrack = track
+          synchronized(trackLock) {
+            activeBgmTrack = track
+          }
         }
       }
     }
@@ -256,17 +270,15 @@ class OmniHardwareAudioEngine {
   fun stopBgmImmediate() {
     activeBgmJob?.cancel()
     activeBgmJob = null
-    val track = activeBgmTrack
-    activeBgmTrack = null
-    if (track != null) {
-      runCatching { track.stop() }
-      runCatching { track.release() }
-    }
+    stopBgmTrackLocked()
   }
 
   private fun stopBgmTrackLocked() {
-    val track = activeBgmTrack
-    activeBgmTrack = null
+    val track = synchronized(trackLock) {
+      val current = activeBgmTrack
+      activeBgmTrack = null
+      current
+    }
     if (track != null) {
       runCatching { track.stop() }
       runCatching { track.release() }
@@ -362,14 +374,22 @@ class OmniHardwareAudioEngine {
     }
 
     /**
-     * Synthesizes a seamless 16-step stereo PCM loop (44.1kHz, 16-bit) across 6 frequency-separated lanes
-     * with cross-fed SPC700/SPU stereo feedback echo and tanh() soft-limiting.
+     * Synthesizes a click-free, seamless 16-step stereo PCM loop (44.1kHz, 16-bit) across 6
+     * frequency-separated lanes with cross-fed SPC700/SPU stereo feedback echo and tanh() soft-limiting.
+     *
+     * Runs 2 passes through the 16-step loop so echo delay lines and oscillator phases are fully
+     * warmed up, outputs pass 2 only, and applies a 128-frame cosine micro-crossfade across the
+     * loop seam so AudioTrack.setLoopPoints(0, frameCount, -1) loops without any click/pop.
      */
     fun renderBgmLoopPcm(theme: BgmThemeId, params: ConvergedAudioParams): ShortArray {
       val steps = theme.melodyOffsets.size
       val stepDurationSec = 60.0 / (theme.bpm * 2.0) // 8th-note grid
       val samplesPerStep = (SAMPLE_RATE * stepDurationSec).toInt().coerceAtLeast(1024)
       val totalFrames = steps * samplesPerStep
+      val pass1L = DoubleArray(totalFrames)
+      val pass1R = DoubleArray(totalFrames)
+      val pass2L = DoubleArray(totalFrames)
+      val pass2R = DoubleArray(totalFrames)
       val out = ShortArray(totalFrames * 2)
 
       // Cross-fed SPC700/PS1 SPU stereo echo delay lines (~180ms L, ~240ms R)
@@ -392,105 +412,123 @@ class OmniHardwareAudioEngine {
       val echoFb = (params.spcEchoFeedback * 0.42).coerceIn(0.0, 0.46)
       val width = params.stereoWidth.coerceIn(0.15f, 1.0f).toDouble()
 
-      for (frame in 0 until totalFrames) {
-        val stepIdx = frame / samplesPerStep
-        val stepPos = (frame % samplesPerStep).toDouble() / samplesPerStep
-        val tStepSec = (frame % samplesPerStep).toDouble() / SAMPLE_RATE
+      for (pass in 0 until 2) {
+        val targetL = if (pass == 0) pass1L else pass2L
+        val targetR = if (pass == 0) pass1R else pass2R
+        for (frame in 0 until totalFrames) {
+          val stepIdx = frame / samplesPerStep
+          val stepPos = (frame % samplesPerStep).toDouble() / samplesPerStep
+          val tStepSec = (frame % samplesPerStep).toDouble() / SAMPLE_RATE
 
-        // 1. MONO BASS LANE: NES 4-Bit Triangle + YM2612 2-Op FM Slap Bass + 120-300Hz phone-speaker harmonic lift
-        val bassMidi = theme.rootMidi - 24 + theme.bassOffsets[stepIdx % theme.bassOffsets.size]
-        val bassHz = midiToHz(bassMidi).coerceIn(55.0, 220.0)
-        bassPhase = (bassPhase + bassHz / SAMPLE_RATE) % 1.0
-        fmModPhase = (fmModPhase + (bassHz * 2.0) / SAMPLE_RATE) % 1.0
-        val triRaw = (4.0 * abs(bassPhase - 0.5) - 1.0)
-        val nesTri4Bit = floor(triRaw * 7.5) / 7.5
-        val fmEnv = exp(-tStepSec * 14.0)
-        val ym2612Slap = sin(2.0 * PI * bassPhase + (2.4 * fmEnv * sin(2.0 * PI * fmModPhase))) * exp(-tStepSec * 5.0)
-        // 120-300Hz phone-speaker upper harmonic warmth so bass stays audible on small speakers
-        val speakerWarmth = 0.30 * sin(4.0 * PI * bassPhase) + 0.16 * sin(6.0 * PI * bassPhase)
-        val bassMono = (nesTri4Bit * params.triangleBassGain * 0.24 +
-          ym2612Slap * params.fmSlapBassGain * 0.22 +
-          speakerWarmth * 0.14) * (1.0 - stepPos * 0.18)
+          // 1. MONO BASS LANE: NES 4-Bit Triangle + YM2612 2-Op FM Slap Bass + 120-300Hz speaker lift
+          val bassMidi = theme.rootMidi - 24 + theme.bassOffsets[stepIdx % theme.bassOffsets.size]
+          val bassHz = midiToHz(bassMidi).coerceIn(55.0, 220.0)
+          bassPhase = (bassPhase + bassHz / SAMPLE_RATE) % 1.0
+          fmModPhase = (fmModPhase + (bassHz * 2.0) / SAMPLE_RATE) % 1.0
+          val triRaw = (4.0 * abs(bassPhase - 0.5) - 1.0)
+          val nesTri4Bit = floor(triRaw * 7.5) / 7.5
+          val fmEnv = exp(-tStepSec * 14.0)
+          val ym2612Slap = sin(2.0 * PI * bassPhase + (2.4 * fmEnv * sin(2.0 * PI * fmModPhase))) * exp(-tStepSec * 5.0)
+          val speakerWarmth = 0.30 * sin(4.0 * PI * bassPhase) + 0.16 * sin(6.0 * PI * bassPhase)
+          val bassMono = (nesTri4Bit * params.triangleBassGain * 0.24 +
+            ym2612Slap * params.fmSlapBassGain * 0.22 +
+            speakerWarmth * 0.14) * (1.0 - stepPos * 0.18)
 
-        // 2. HEROIC LEAD LANE: GB/NES 25% Pulse + VRC6 Sawtooth + FM/GBA Brass
-        val leadMidi = theme.rootMidi + theme.melodyOffsets[stepIdx]
-        val leadHz = midiToHz(leadMidi)
-        leadPhase = (leadPhase + leadHz / SAMPLE_RATE) % 1.0
-        val pulse25 = if (leadPhase < 0.25) 0.85 else -0.85
-        val vrc6Saw = 2.0 * leadPhase - 1.0
-        val gbaBrass = sin(2.0 * PI * leadPhase + 0.9 * sin(2.0 * PI * leadPhase)) * (1.0 - exp(-tStepSec * 38.0))
-        val leadEnv = (1.0 - exp(-tStepSec * 65.0)) * exp(-tStepSec * 3.8)
-        val leadSig = (pulse25 * 0.45 + vrc6Saw * 0.28 + gbaBrass * 0.27) * leadEnv * params.pulseLeadGain * 0.26
+          // 2. HEROIC LEAD LANE: GB/NES 25% Pulse + VRC6 Sawtooth + FM/GBA Brass
+          val leadMidi = theme.rootMidi + theme.melodyOffsets[stepIdx]
+          val leadHz = midiToHz(leadMidi)
+          leadPhase = (leadPhase + leadHz / SAMPLE_RATE) % 1.0
+          val pulse25 = if (leadPhase < 0.25) 0.85 else -0.85
+          val vrc6Saw = 2.0 * leadPhase - 1.0
+          val gbaBrass = sin(2.0 * PI * leadPhase + 0.9 * sin(2.0 * PI * leadPhase)) * (1.0 - exp(-tStepSec * 38.0))
+          val leadEnv = (1.0 - exp(-tStepSec * 65.0)) * exp(-tStepSec * 3.8)
+          val leadSig = (pulse25 * 0.45 + vrc6Saw * 0.28 + gbaBrass * 0.27) * leadEnv * params.pulseLeadGain * 0.26
 
-        // 3. PANNED C64 SID / PC ENGINE ARPEGGIO LANE
-        val arpSubIdx = ((stepPos * 3.0).toInt()) % theme.arpOffsets.size
-        val arpMidi = theme.rootMidi - 12 + theme.arpOffsets[arpSubIdx]
-        val arpHz = midiToHz(arpMidi)
-        arpPhase = (arpPhase + arpHz / SAMPLE_RATE) % 1.0
-        val sidPulse = if (arpPhase < 0.35) 0.7 else -0.7
-        val arpSig = sidPulse * exp(-((stepPos * 3.0) % 1.0) * 3.2) * params.sidArpGain * 0.14
-        val arpPan = if ((stepIdx + arpSubIdx) % 2 == 0) 0.65 * width else -0.65 * width
-        val arpL = arpSig * (0.5 - arpPan * 0.5)
-        val arpR = arpSig * (0.5 + arpPan * 0.5)
+          // 3. PANNED C64 SID / PC ENGINE ARPEGGIO LANE
+          val arpSubIdx = ((stepPos * 3.0).toInt()) % theme.arpOffsets.size
+          val arpMidi = theme.rootMidi - 12 + theme.arpOffsets[arpSubIdx]
+          val arpHz = midiToHz(arpMidi)
+          arpPhase = (arpPhase + arpHz / SAMPLE_RATE) % 1.0
+          val sidPulse = if (arpPhase < 0.35) 0.7 else -0.7
+          val arpSig = sidPulse * exp(-((stepPos * 3.0) % 1.0) * 3.2) * params.sidArpGain * 0.14
+          val arpPan = if ((stepIdx + arpSubIdx) % 2 == 0) 0.65 * width else -0.65 * width
+          val arpL = arpSig * (0.5 - arpPan * 0.5)
+          val arpR = arpSig * (0.5 + arpPan * 0.5)
 
-        // 4. WIDE STEREO MSU-1 DETUNED ORCHESTRAL PAD (+ Extra Pretty Shimmering Choir)
-        val padMidi = theme.rootMidi - 12 + theme.bassOffsets[(stepIdx / 2) % theme.bassOffsets.size]
-        val padHz = midiToHz(padMidi)
-        padPhaseA = (padPhaseA + (padHz * 0.997) / SAMPLE_RATE) % 1.0
-        padPhaseB = (padPhaseB + (padHz * 1.003) / SAMPLE_RATE) % 1.0
-        val padL = (sin(2.0 * PI * padPhaseA) + 0.35 * sin(4.0 * PI * padPhaseA)) * params.orchestralPadGain * 0.11
-        val padR = (sin(2.0 * PI * padPhaseB) + 0.35 * sin(4.0 * PI * padPhaseB)) * params.orchestralPadGain * 0.11
+          // 4. WIDE STEREO MSU-1 DETUNED ORCHESTRAL PAD (+ Extra Pretty Shimmering Choir)
+          val padMidi = theme.rootMidi - 12 + theme.bassOffsets[(stepIdx / 2) % theme.bassOffsets.size]
+          val padHz = midiToHz(padMidi)
+          padPhaseA = (padPhaseA + (padHz * 0.997) / SAMPLE_RATE) % 1.0
+          padPhaseB = (padPhaseB + (padHz * 1.003) / SAMPLE_RATE) % 1.0
+          val padL = (sin(2.0 * PI * padPhaseA) + 0.35 * sin(4.0 * PI * padPhaseA)) * params.orchestralPadGain * 0.11
+          val padR = (sin(2.0 * PI * padPhaseB) + 0.35 * sin(4.0 * PI * padPhaseB)) * params.orchestralPadGain * 0.11
 
-        var choirL = 0.0
-        var choirR = 0.0
-        if (params.extraLushChoirReverb) {
-          choirPhase = (choirPhase + (padHz * 2.0) / SAMPLE_RATE) % 1.0
-          val shimmer = sin(2.0 * PI * choirPhase) * 0.075
-          choirL = shimmer * (0.7 + 0.3 * sin(frame * 0.0002))
-          choirR = shimmer * (0.7 - 0.3 * sin(frame * 0.0002))
-        }
-
-        // 5. 16-BIT LFSR PERCUSSION LANE (Kick + Snare + Hi-Hat)
-        var perc = 0.0
-        if (theme.energetic || stepIdx % 2 == 0) {
-          val bit = ((lfsr shr 0) xor (lfsr shr 2) xor (lfsr shr 3) xor (lfsr shr 5)) and 1
-          lfsr = (lfsr shr 1) or (bit shl 15)
-          val noise = if ((lfsr and 1) == 1) 1.0 else -1.0
-          val isKick = stepIdx % 4 == 0
-          val isSnare = stepIdx % 4 == 2
-          if (isKick && tStepSec < 0.09) {
-            val kickFreq = 145.0 * exp(-tStepSec * 28.0) + 48.0
-            perc += sin(2.0 * PI * kickFreq * tStepSec) * exp(-tStepSec * 26.0) * 0.28
-          } else if (isSnare && tStepSec < 0.08) {
-            perc += noise * exp(-tStepSec * 36.0) * 0.20
-          } else if (tStepSec < 0.028) {
-            perc += noise * exp(-tStepSec * 85.0) * 0.08
+          var choirL = 0.0
+          var choirR = 0.0
+          if (params.extraLushChoirReverb) {
+            choirPhase = (choirPhase + (padHz * 2.0) / SAMPLE_RATE) % 1.0
+            val shimmer = sin(2.0 * PI * choirPhase) * 0.075
+            val lfoPhase = (frame.toDouble() / totalFrames) * 2.0 * PI
+            choirL = shimmer * (0.7 + 0.3 * sin(lfoPhase))
+            choirR = shimmer * (0.7 - 0.3 * sin(lfoPhase))
           }
-          perc *= params.lfsrPercussionGain
+
+          // 5. 16-BIT LFSR PERCUSSION LANE (Kick + Snare + Hi-Hat)
+          var perc = 0.0
+          if (theme.energetic || stepIdx % 2 == 0) {
+            val bit = ((lfsr shr 0) xor (lfsr shr 2) xor (lfsr shr 3) xor (lfsr shr 5)) and 1
+            lfsr = (lfsr shr 1) or (bit shl 15)
+            val noise = if ((lfsr and 1) == 1) 1.0 else -1.0
+            val isKick = stepIdx % 4 == 0
+            val isSnare = stepIdx % 4 == 2
+            if (isKick && tStepSec < 0.09) {
+              val kickFreq = 145.0 * exp(-tStepSec * 28.0) + 48.0
+              perc += sin(2.0 * PI * kickFreq * tStepSec) * exp(-tStepSec * 26.0) * 0.28
+            } else if (isSnare && tStepSec < 0.08) {
+              perc += noise * exp(-tStepSec * 36.0) * 0.20
+            } else if (tStepSec < 0.028) {
+              perc += noise * exp(-tStepSec * 85.0) * 0.08
+            }
+            perc *= params.lfsrPercussionGain
+          }
+
+          // Cross-fed SPC700 / PS1 SPU Stereo Echo
+          val dryL = leadSig * 0.88 + arpL + padL + choirL
+          val dryR = leadSig * 0.88 + arpR + padR + choirR
+          val tapL = delayL[dIdxL]
+          val tapR = delayR[dIdxR]
+          delayL[dIdxL] = dryL + tapR * echoFb
+          delayR[dIdxR] = dryR + tapL * echoFb
+          dIdxL = (dIdxL + 1) % delayLSize
+          dIdxR = (dIdxR + 1) % delayRSize
+
+          val echoMix = if (params.extraLushChoirReverb) 0.42 else 0.28
+          var mixL = bassMono + dryL + perc + tapL * echoMix
+          var mixR = bassMono + dryR + perc + tapR * echoMix
+
+          if (params.bitcrushDepth > 0.02f) {
+            mixL = quantizeBitcrush(mixL, params.bitcrushDepth)
+            mixR = quantizeBitcrush(mixR, params.bitcrushDepth)
+          }
+
+          targetL[frame] = mixL
+          targetR[frame] = mixR
         }
+      }
 
-        // Cross-fed SPC700 / PS1 SPU Stereo Echo
-        val dryL = leadSig * 0.88 + arpL + padL + choirL
-        val dryR = leadSig * 0.88 + arpR + padR + choirR
-        val tapL = delayL[dIdxL]
-        val tapR = delayR[dIdxR]
-        delayL[dIdxL] = dryL + tapR * echoFb
-        delayR[dIdxR] = dryR + tapL * echoFb
-        dIdxL = (dIdxL + 1) % delayLSize
-        dIdxR = (dIdxR + 1) % delayRSize
+      // 128-frame micro-crossfade across loop seam: smoothly welds end of warmed pass 2 into start of pass 2
+      val xfadeFrames = 128.coerceAtMost(totalFrames / 8)
+      for (i in 0 until xfadeFrames) {
+        val alpha = 0.5 - 0.5 * kotlin.math.cos(PI * i.toDouble() / xfadeFrames)
+        val tailIdx = totalFrames - xfadeFrames + i
+        pass2L[tailIdx] = pass2L[tailIdx] * (1.0 - alpha) + pass2L[i] * alpha
+        pass2R[tailIdx] = pass2R[tailIdx] * (1.0 - alpha) + pass2R[i] * alpha
+      }
 
-        val echoMix = if (params.extraLushChoirReverb) 0.42 else 0.28
-        var mixL = bassMono + dryL + perc + tapL * echoMix
-        var mixR = bassMono + dryR + perc + tapR * echoMix
-
-        if (params.bitcrushDepth > 0.02f) {
-          mixL = quantizeBitcrush(mixL, params.bitcrushDepth)
-          mixR = quantizeBitcrush(mixR, params.bitcrushDepth)
-        }
-
-        // 6. Soft-limiting master bus via tanh() — zero clipping, zero NaN
-        val limL = tanh(mixL * 1.15)
-        val limR = tanh(mixR * 1.15)
+      // 6. Soft-limiting master bus via tanh() — zero clipping, zero NaN
+      for (frame in 0 until totalFrames) {
+        val limL = tanh(pass2L[frame] * 1.15)
+        val limR = tanh(pass2R[frame] * 1.15)
         out[frame * 2] = (limL * Short.MAX_VALUE * 0.82).toInt().coerceIn(-32767, 32767).toShort()
         out[frame * 2 + 1] = (limR * Short.MAX_VALUE * 0.82).toInt().coerceIn(-32767, 32767).toShort()
       }

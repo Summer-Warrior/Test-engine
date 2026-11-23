@@ -21,9 +21,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -65,7 +65,7 @@ import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
 
 /**
- * Shared Create / Edit dialog for Firestore FanGameProject records.
+ * Shared Create / Edit dialog for Local Room DB FanGameProject records.
  */
 @Composable
 fun ProjectEditorDialog(
@@ -124,7 +124,7 @@ fun ProjectEditorDialog(
     containerColor = StudioCardDark,
     title = {
       Text(
-        text = if (isEdit) "Edit Cloud Fan Game Project" else "Create New Cloud Project",
+        text = if (isEdit) "Edit Local Fan Game Project" else "Create New Studio Project",
         style = MaterialTheme.typography.titleLarge,
         fontWeight = FontWeight.Bold,
         color = CyberCyan,
@@ -363,7 +363,7 @@ fun ProjectSwitcherDialog(
                 fontWeight = FontWeight.Bold,
               )
               Text(
-                text = "Save before switching so engine tweaks persist in Firestore.",
+                text = "Save before switching so engine tweaks persist in Local Room DB.",
                 style = MaterialTheme.typography.labelSmall,
                 color = StudioTextSecondary,
               )
@@ -386,7 +386,7 @@ fun ProjectSwitcherDialog(
         when (cloudGamesState) {
           is UiState.Loading -> {
             Text(
-              text = "Syncing cloud projects from Firestore...",
+              text = "Loading projects from Local Room Vault...",
               style = MaterialTheme.typography.bodyMedium,
               color = StudioTextSecondary,
             )
@@ -403,7 +403,7 @@ fun ProjectSwitcherDialog(
           is UiState.Success -> {
             if (cloudGamesState.data.isEmpty()) {
               Text(
-                text = "No cloud fan game projects yet. Create your first project below to sync builds with Firestore.",
+                text = "No local fan game projects yet. Create your first project below to store builds offline in Room SQLite.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = StudioTextSecondary,
               )
@@ -486,7 +486,7 @@ fun ProjectSwitcherDialog(
           modifier = Modifier.testTag("switcher_open_manager_button"),
         ) {
           Icon(
-            imageVector = Icons.Default.CloudDone,
+            imageVector = Icons.Default.Storage,
             contentDescription = null,
             modifier = Modifier.size(16.dp),
             tint = CyberCyan,
@@ -574,7 +574,7 @@ fun ActiveProjectHeaderPill(
         )
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = activeProject?.title ?: "No Active Cloud Project",
+            text = activeProject?.title ?: "No Active Local Project",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
             color = StudioTextPrimary,
@@ -584,9 +584,9 @@ fun ActiveProjectHeaderPill(
           Text(
             text = if (activeProject != null) {
               "${activeProject.versionTag} • ${activeProject.regionName}" +
-                if (hasUnsavedChanges) " • Unsaved edits" else " • Synced"
+                if (hasUnsavedChanges) " • Unsaved edits" else " • Saved Offline"
             } else {
-              "Tap to create or switch Firestore project"
+              "Tap to create or switch Local Vault project"
             },
             style = MaterialTheme.typography.labelSmall,
             color = if (hasUnsavedChanges) SuperFxGold else CyberCyan,

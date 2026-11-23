@@ -3,7 +3,9 @@ package com.example.ui.shaders
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.engine.ConvergedVisualParams
@@ -11,12 +13,14 @@ import com.example.engine.ConvergedVisualParams
 /**
  * Full-Viewport Multi-Hardware Display Post-FX Shader (Android 13+ / API 33+ AGSL).
  *
- * Drives real hardware display signatures in a single GPU pass:
+ * Compiles RuntimeShader ONCE per composable instance via Modifier.composed + remember {}
+ * and updates only lightweight float uniforms inside graphicsLayer.
+ *
  * - GBA hardware mosaic battle-entry dissolve (mosaicFactor 10f -> 1f)
  * - GBC ordered 4x4 Bayer dither quantization
  * - DMG 4-shade dot-matrix LCD sub-pixel grid
  * - Wii / PS2 soft highlight bloom lift
- * - PokeCRT-RTX Sony PVM RGB aperture grille + soft vignette (+ optional analog curvature)
+ * - PokeCRT-RTX Sony PVM RGB aperture grille + soft vignette + crisp black-masked CRT curvature
  */
 object OmniDisplayPostShader {
   const val AGSL_SOURCE = """
@@ -41,15 +45,18 @@ object OmniDisplayPostShader {
       float2 res = max(resolution, float2(1.0, 1.0));
       float2 uv = fragCoord / res;
 
-      // Optional analog CRT barrel curvature (Extra Pretty toggle)
+      // Optional analog CRT barrel curvature with clean black bezel outside [0.0, 1.0] (zero edge smearing!)
       if (crtCurvature > 0.5) {
         float2 c = uv * 2.0 - 1.0;
         float r2 = dot(c, c);
         c *= (1.0 + 0.055 * r2);
         uv = c * 0.5 + 0.5;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+          return half4(0.0, 0.0, 0.0, 1.0);
+        }
       }
 
-      float2 sampleCoord = clamp(uv, 0.0, 1.0) * res;
+      float2 sampleCoord = uv * res;
 
       // GBA Hardware Mosaic Dissolve (1.0 = crisp, up to 10.0 = chunky transition blocks)
       if (mosaicFactor > 1.05) {
@@ -107,7 +114,8 @@ object OmniDisplayPostShader {
     }
   """
 
-  fun createRenderEffect(
+  fun applyUniformsAndBuildEffect(
+    shader: RuntimeShader,
     widthPx: Float,
     heightPx: Float,
     visuals: ConvergedVisualParams,
@@ -116,7 +124,6 @@ object OmniDisplayPostShader {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
     if (widthPx <= 1f || heightPx <= 1f) return null
     return runCatching {
-      val shader = RuntimeShader(AGSL_SOURCE)
       shader.setFloatUniform("resolution", widthPx, heightPx)
       shader.setFloatUniform("mosaicFactor", mosaicFactor.coerceIn(1f, 10f))
       shader.setFloatUniform("crtIntensity", visuals.crtScanline.coerceIn(0f, 1f))
@@ -132,11 +139,25 @@ object OmniDisplayPostShader {
 fun Modifier.omniDisplayPostEffect(
   visuals: ConvergedVisualParams,
   mosaicFactor: Float = 1f,
-): Modifier = this.graphicsLayer {
-  renderEffect = OmniDisplayPostShader.createRenderEffect(
-    widthPx = size.width,
-    heightPx = size.height,
-    visuals = visuals,
-    mosaicFactor = mosaicFactor,
-  )
+): Modifier = composed {
+  val cachedShader = remember {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      runCatching { RuntimeShader(OmniDisplayPostShader.AGSL_SOURCE) }.getOrNull()
+    } else {
+      null
+    }
+  }
+  this.graphicsLayer {
+    renderEffect = if (cachedShader != null) {
+      OmniDisplayPostShader.applyUniformsAndBuildEffect(
+        shader = cachedShader,
+        widthPx = size.width,
+        heightPx = size.height,
+        visuals = visuals,
+        mosaicFactor = mosaicFactor,
+      )
+    } else {
+      null
+    }
+  }
 }

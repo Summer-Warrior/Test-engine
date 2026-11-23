@@ -20,9 +20,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarToday
-import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -49,8 +51,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.model.ConsoleHardwareCatalog
 import com.example.data.model.FanGameProject
+import com.example.engine.HardwarePlatformSpec
+import com.example.engine.UniversalHardwareRegistry
 import com.example.ui.ProjectOverviewStats
 import com.example.ui.UiState
 import com.example.ui.theme.CyberCyan
@@ -65,17 +68,19 @@ import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
  * Project Dashboard displaying the real-time Project Overview statistics component
- * alongside existing fan game projects synced from Firestore,
- * showing each project's name, creation date, and a 'View Details' action.
+ * alongside fan game projects stored in the Local Studio Vault (Offline Room v4 DB),
+ * with Android Storage Access Framework JSON Export/Import and 'View Details' actions.
  */
 @Composable
 fun ProjectDashboard(
   cloudGamesState: UiState<List<FanGameProject>>,
   projectOverviewState: UiState<ProjectOverviewStats?>,
+  allHardwarePlatforms: List<HardwarePlatformSpec>,
   activeProjectId: String?,
   hasUnsavedChanges: Boolean,
   onSavePendingChanges: () -> Unit,
@@ -84,6 +89,8 @@ fun ProjectDashboard(
   onOpenProjectManager: () -> Unit,
   onCreateNewProject: () -> Unit,
   onSeedStarterProjects: () -> Unit,
+  onExportActiveProjectJson: () -> Unit,
+  onImportProjectJson: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var selectedProjectForDetails by remember { mutableStateOf<FanGameProject?>(null) }
@@ -94,7 +101,7 @@ fun ProjectDashboard(
       .testTag("project_dashboard_container"),
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
-    // Live Firestore Project Overview Card for the currently selected project
+    // Live Offline Room DB Project Overview Card for the currently selected project
     ProjectOverviewDashboard(
       overviewState = projectOverviewState,
       hasUnsavedChanges = hasUnsavedChanges,
@@ -127,19 +134,19 @@ fun ProjectDashboard(
             ) {
               Icon(
                 imageVector = Icons.Default.Dashboard,
-                contentDescription = "Project Dashboard",
+                contentDescription = "Local Studio Vault Dashboard",
                 tint = CyberCyan,
                 modifier = Modifier.size(18.dp),
               )
               Text(
-                text = "FIRESTORE PROJECT DASHBOARD",
+                text = "LOCAL STUDIO VAULT • OFFLINE ROOM DB",
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberCyan,
               )
             }
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-              text = "Existing Fan Game Projects",
+              text = "Your Fan Game Projects",
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
               color = StudioTextPrimary,
@@ -169,17 +176,17 @@ fun ProjectDashboard(
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           DashboardMetricChip(
-            label = "Cloud Projects",
+            label = "Vault Projects",
             value = totalCount.toString(),
             accentColor = CyberCyan,
             modifier = Modifier.weight(1f),
           )
           DashboardMetricChip(
-            label = "Backend Sync",
+            label = "Storage Engine",
             value = when (cloudGamesState) {
-              is UiState.Loading -> "Syncing..."
-              is UiState.Error -> "Alert"
-              is UiState.Success -> "Firestore Live"
+              is UiState.Loading -> "Loading..."
+              is UiState.Error -> "Notice"
+              is UiState.Success -> "Offline Room v4"
             },
             accentColor = when (cloudGamesState) {
               is UiState.Loading -> SuperFxGold
@@ -189,10 +196,51 @@ fun ProjectDashboard(
             modifier = Modifier.weight(1f),
           )
         }
+
+        // Local JSON Project Export & Import (Android Storage Access Framework)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          OutlinedButton(
+            onClick = onExportActiveProjectJson,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+              .weight(1f)
+              .heightIn(min = 48.dp)
+              .testTag("export_project_json_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FileUpload,
+              contentDescription = "Export Active Project to JSON",
+              tint = SuperFxGold,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Export (.json)", color = SuperFxGold, fontWeight = FontWeight.Bold, maxLines = 1)
+          }
+          OutlinedButton(
+            onClick = onImportProjectJson,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+              .weight(1f)
+              .heightIn(min = 48.dp)
+              .testTag("import_project_json_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FileDownload,
+              contentDescription = "Import Project from JSON",
+              tint = CyberCyan,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Import (.json)", color = CyberCyan, fontWeight = FontWeight.Bold, maxLines = 1)
+          }
+        }
       }
     }
 
-    // Firestore Project List
+    // Offline Room Project List
     when (cloudGamesState) {
       is UiState.Loading -> {
         Card(
@@ -209,7 +257,7 @@ fun ProjectDashboard(
           ) {
             CircularProgressIndicator(color = CyberCyan)
             Text(
-              text = "Loading fan game projects from Firestore...",
+              text = "Loading fan game projects from Local Room Vault...",
               style = MaterialTheme.typography.bodyMedium,
               color = StudioTextSecondary,
             )
@@ -262,19 +310,19 @@ fun ProjectDashboard(
               verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
               Icon(
-                imageVector = Icons.Default.CloudDone,
-                contentDescription = "No Cloud Projects Yet",
+                imageVector = Icons.Default.Storage,
+                contentDescription = "No Local Vault Projects Yet",
                 tint = SuperFxGold,
                 modifier = Modifier.size(36.dp),
               )
               Text(
-                text = "No Fan Game Projects in Firestore Yet",
+                text = "No Fan Game Projects in Local Vault Yet",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = StudioTextPrimary,
               )
               Text(
-                text = "Create a new fan game project or provision starter multi-console projects to see them on your dashboard.",
+                text = "Create a new fan game project, import a .json bundle, or seed starter multi-console projects.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = StudioTextSecondary,
               )
@@ -323,6 +371,7 @@ fun ProjectDashboard(
   selectedProjectForDetails?.let { project ->
     ProjectDetailsDialog(
       project = project,
+      allHardwarePlatforms = allHardwarePlatforms,
       onDismiss = { selectedProjectForDetails = null },
       onSwitchAndOpen = {
         selectedProjectForDetails = null
@@ -372,7 +421,7 @@ private fun ProjectDashboardRowCard(
   isActive: Boolean,
   onViewDetails: () -> Unit,
 ) {
-  val createdDateText = remember(project.createdAt) {
+  val createdDateText = remember(project.createdAtMs) {
     formatCreationDate(project)
   }
 
@@ -480,20 +529,13 @@ private fun ProjectDashboardRowCard(
 @Composable
 private fun ProjectDetailsDialog(
   project: FanGameProject,
+  allHardwarePlatforms: List<HardwarePlatformSpec>,
   onDismiss: () -> Unit,
   onSwitchAndOpen: () -> Unit,
   onManageProject: () -> Unit,
 ) {
-  val chipNames = remember(project.activeChipsCsv) {
-    val catalog = ConsoleHardwareCatalog.officialAndFanChips
-    project.activeChipsCsv.split(",")
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      .map { token ->
-        catalog.firstOrNull {
-          it.id.equals(token, ignoreCase = true) || it.name.contains(token, ignoreCase = true)
-        }?.name ?: token
-      }
+  val (hardwareHeadline, hardwareBadges) = remember(project.activeChipsCsv, allHardwarePlatforms) {
+    UniversalHardwareRegistry.formatReadableHardwareSummary(project.activeChipsCsv, allHardwarePlatforms)
   }
 
   AlertDialog(
@@ -571,11 +613,12 @@ private fun ProjectDetailsDialog(
           )
         }
 
-        if (chipNames.isNotEmpty()) {
+        if (hardwareBadges.isNotEmpty()) {
           Text(
-            text = "Active Enhancement Chips",
+            text = "Hardware Convergence: $hardwareHeadline",
             style = MaterialTheme.typography.labelSmall,
-            color = StudioTextSecondary,
+            color = SuperFxGold,
+            fontWeight = FontWeight.SemiBold,
           )
           Row(
             modifier = Modifier
@@ -583,7 +626,7 @@ private fun ProjectDetailsDialog(
               .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
           ) {
-            chipNames.forEach { chip ->
+            hardwareBadges.forEach { badge ->
               Box(
                 modifier = Modifier
                   .clip(RoundedCornerShape(8.dp))
@@ -592,7 +635,7 @@ private fun ProjectDetailsDialog(
                   .padding(horizontal = 8.dp, vertical = 4.dp),
               ) {
                 Text(
-                  text = chip,
+                  text = badge,
                   style = MaterialTheme.typography.labelSmall,
                   color = StudioTextPrimary,
                 )
@@ -659,13 +702,14 @@ private fun DetailKeyValueRow(label: String, value: String) {
 }
 
 private fun formatCreationDate(project: FanGameProject): String {
-  val date = project.createdAt?.toDate() ?: return "Just created"
+  if (project.createdAtMs <= 0L) return "Just created"
   val formatter = SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault())
-  return formatter.format(date)
+  return formatter.format(Date(project.createdAtMs))
 }
 
 private fun formatUpdatedDate(project: FanGameProject): String {
-  val date = project.updatedAt?.toDate() ?: project.createdAt?.toDate() ?: return "Just synced"
+  val ms = if (project.updatedAtMs > 0L) project.updatedAtMs else project.createdAtMs
+  if (ms <= 0L) return "Just saved"
   val formatter = SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault())
-  return formatter.format(date)
+  return formatter.format(Date(ms))
 }

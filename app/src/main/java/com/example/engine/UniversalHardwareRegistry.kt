@@ -190,8 +190,7 @@ object UniversalHardwareRegistry {
   }
 
   /**
-   * Compact Firestore token representation so selecting all 85+ platforms never truncates
-   * or exceeds Firestore document limits. Full checklists live in Room SQLite.
+   * Compact Room/JSON token representation so selecting all 156 platforms stays crisp and portable.
    */
   fun encodeSelectionToken(
     activeIds: Set<String>,
@@ -205,7 +204,7 @@ object UniversalHardwareRegistry {
       return MasterDisciplineMode.SHOVEL_KNIGHT_CURATED.token
     }
     val sorted = activeIds.sorted().joinToString(",")
-    return "${disciplineMode.token}|$sorted".take(1950)
+    return "${disciplineMode.token}|$sorted".take(3600)
   }
 
   fun decodeSelectionToken(
@@ -213,19 +212,51 @@ object UniversalHardwareRegistry {
     allCatalogIds: Set<String>,
   ): Pair<MasterDisciplineMode, Set<String>> {
     val clean = token.trim()
-    if (clean.isEmpty()) return MasterDisciplineMode.SHOVEL_KNIGHT_CURATED to defaultCuratedHardwareIds
+    val allOrFallback = allCatalogIds.ifEmpty { defaultCuratedHardwareIds }
+    if (clean.isEmpty()) return MasterDisciplineMode.SHOVEL_KNIGHT_CURATED to allOrFallback
     val parts = clean.split("|", limit = 2)
     val mode = MasterDisciplineMode.entries.firstOrNull { it.token == parts[0] }
       ?: MasterDisciplineMode.SHOVEL_KNIGHT_CURATED
     val payload = parts.getOrNull(1) ?: parts[0]
     val ids = when {
-      payload == TOKEN_ALL_ON_RECORD -> allCatalogIds.ifEmpty { defaultCuratedHardwareIds }
+      payload == TOKEN_ALL_ON_RECORD -> allOrFallback
       payload == MasterDisciplineMode.SHOVEL_KNIGHT_CURATED.token -> defaultCuratedHardwareIds
-      payload == MasterDisciplineMode.MAXIMALIST_PRETTY.token -> allCatalogIds.ifEmpty { defaultCuratedHardwareIds }
+      payload == MasterDisciplineMode.MAXIMALIST_PRETTY.token -> allOrFallback
       else -> payload.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        .ifEmpty { defaultCuratedHardwareIds }
+        .ifEmpty { allOrFallback }
     }
     return mode to ids
+  }
+
+  /**
+   * Formats raw hardware token strings (e.g. "SHOVEL_KNIGHT_CURATED|ALL_ON_RECORD") into human-readable
+   * labels and chip badges so no UI card ever renders raw pipe-delimited tokens.
+   */
+  fun formatReadableHardwareSummary(
+    token: String,
+    allPlatforms: List<HardwarePlatformSpec>,
+  ): Pair<String, List<String>> {
+    val allIds = allPlatforms.map { it.id }.toSet()
+    val byId = allPlatforms.associateBy { it.id }
+    val (mode, activeIds) = decodeSelectionToken(token, allIds)
+    val count = activeIds.size
+    val total = allPlatforms.size.coerceAtLeast(count)
+    val headline = when {
+      total > 0 && count >= total -> "All $total Hardware • ${mode.label}"
+      count == 1 -> {
+        val single = byId[activeIds.first()]
+        "${single?.name ?: activeIds.first()} • ${mode.label}"
+      }
+      else -> "$count Hardware Active • ${mode.label}"
+    }
+    val badges = if (total > 0 && count >= total) {
+      listOf("All $total Systems", mode.label, "Shovel Knight+ Grid", "Omni-DSP Audio")
+    } else {
+      val names = activeIds.mapNotNull { byId[it]?.name?.substringBefore(" (") }.take(4)
+      val extra = (count - names.size).coerceAtLeast(0)
+      if (extra > 0) names + "+$extra more" else names.ifEmpty { listOf(mode.label) }
+    }
+    return headline to badges
   }
 
   private fun fallbackMinimalCatalog(): List<HardwarePlatformSpec> = listOf(
@@ -246,6 +277,215 @@ object UniversalHardwareRegistry {
       audioTraits = AudioTraitVector(0.62f, 0.70f, 0.30f, 0.50f, 0.96f, 0.82f, 0.55f, 0.10f, 0.88f),
     ),
   )
+}
+
+enum class HardwareRuntimeSection(val label: String) {
+  ULTIMATE("Ultimate Target Style"),
+  CURATED_COMBO("Multi-Hardware Combos"),
+  CATEGORY_OR_ERA("Category & Era Suites"),
+  INDIVIDUAL_PURIST("All 156 Individual Systems"),
+}
+
+data class HardwareRuntimePreset(
+  val id: String,
+  val section: HardwareRuntimeSection,
+  val label: String,
+  val subtitle: String,
+  val disciplineMode: MasterDisciplineMode,
+  val platformIds: Set<String>,
+  val enableAllExtraPretty: Boolean = false,
+)
+
+/**
+ * Curated Game Test Hardware Runtime Mode Catalog providing instant switching between:
+ * A) Ultimate Target Style (All 156 Hardware — Curated [Default] or Maximalist Pretty)
+ * B) 10 Cross-Era Multi-Hardware Combos
+ * C) Every Hardware Category & Era/Generation Suite
+ * D) Every Individual Platform (all 156 in RAW_HARDWARE_PURIST mode)
+ * E) 8-Step Guided Hardware Tour ending on Ultimate Target Style
+ */
+object HardwareRuntimePresetCatalog {
+  const val MODE_ULTIMATE_CURATED = "ultimate_all_156_curated"
+  const val MODE_ULTIMATE_MAXIMALIST = "ultimate_all_156_maximalist"
+
+  fun buildUltimatePresets(allPlatforms: List<HardwarePlatformSpec>): List<HardwareRuntimePreset> {
+    val allIds = allPlatforms.map { it.id }.toSet().ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
+    val count = allIds.size
+    return listOf(
+      HardwareRuntimePreset(
+        id = MODE_ULTIMATE_CURATED,
+        section = HardwareRuntimeSection.ULTIMATE,
+        label = "Ultimate Target Style — All $count Hardware (Shovel Knight+ Curated)",
+        subtitle = "Default converged art & audio across every system on record with crisp 1px ink discipline",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = allIds,
+        enableAllExtraPretty = false,
+      ),
+      HardwareRuntimePreset(
+        id = MODE_ULTIMATE_MAXIMALIST,
+        section = HardwareRuntimeSection.ULTIMATE,
+        label = "Ultimate Target Style — All $count Hardware (Maximalist Pretty)",
+        subtitle = "All $count platforms with ultra voxels, volumetric rays, caustics, 60fps & lush choir reverb",
+        disciplineMode = MasterDisciplineMode.MAXIMALIST_PRETTY,
+        platformIds = allIds,
+        enableAllExtraPretty = true,
+      ),
+    )
+  }
+
+  fun buildCuratedCombos(allPlatforms: List<HardwarePlatformSpec>): List<HardwareRuntimePreset> {
+    val valid = allPlatforms.map { it.id }.toSet()
+    fun pick(vararg ids: String): Set<String> = ids.filter { valid.isEmpty() || it in valid }.toSet()
+      .ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
+
+    val nintendoAll = allPlatforms.filter { it.manufacturer.contains("Nintendo", ignoreCase = true) }.map { it.id }.toSet()
+    val segaAll = allPlatforms.filter { it.manufacturer.contains("Sega", ignoreCase = true) }.map { it.id }.toSet()
+    val handheldsAll = allPlatforms.filter { it.category.equals("Handheld", ignoreCase = true) }.map { it.id }.toSet()
+    val arcadeAll = allPlatforms.filter { it.category.equals("Arcade", ignoreCase = true) }.map { it.id }.toSet()
+    val computersAll = allPlatforms.filter { it.category.equals("Computer", ignoreCase = true) }.map { it.id }.toSet()
+
+    return listOf(
+      HardwareRuntimePreset(
+        id = "combo_8_16_cart",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "8/16-Bit Cartridge Golden Age",
+        subtitle = "NES + VRC6 + GBC + SGB2 + SNES + Super FX2 + SA-1 + Genesis",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = pick("nes_famicom", "nes_vrc6_fds", "game_boy_color", "sgb2_border", "snes_sfc", "super_fx2", "sa_1", "sega_genesis"),
+      ),
+      HardwareRuntimePreset(
+        id = "combo_16_arcade_dream",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "16-Bit Arcade Dream",
+        subtitle = "Neo Geo + CPS1/2/3 + Sega Super Scaler + Amiga AGA + Sharp X68000",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = pick("neo_geo_aes", "capcom_cps1", "capcom_cps2", "capcom_cps3", "sega_super_scaler", "amiga_aga", "sharp_x68000"),
+      ),
+      HardwareRuntimePreset(
+        id = "combo_32_64_early3d",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "32/64-Bit Early 3D",
+        subtitle = "PS1 GTE + Sega Saturn + N64 RCP + Sega 32X + 3DO",
+        disciplineMode = MasterDisciplineMode.RAW_HARDWARE_PURIST,
+        platformIds = pick("ps1_gte", "sega_saturn", "n64_rcp", "sega_32x", "3do_interactive"),
+      ),
+      HardwareRuntimePreset(
+        id = "combo_128_stylized_arena",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "128-Bit Stylized Arena",
+        subtitle = "Dreamcast + GameCube TEV + PS2 GS + Wii + Original Xbox",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = pick("dreamcast", "gamecube_tev", "ps2_gs", "nintendo_wii", "xbox_original"),
+      ),
+      HardwareRuntimePreset(
+        id = "combo_handheld_legacy",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "All Handhelds Legacy (${handheldsAll.size} Systems)",
+        subtitle = "DMG through GBC, GBA, DS, 3DS, PSP, Vita & Steam Deck",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = handheldsAll.ifEmpty { pick("game_boy_dmg", "game_boy_color", "gba_agb", "nintendo_ds_dsi", "nintendo_3ds_pica200", "psp_allegrex", "ps_vita", "steam_deck") },
+      ),
+      HardwareRuntimePreset(
+        id = "combo_hd2d_modern",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "HD-2D Modern Converged",
+        subtitle = "SNES + GBA + DS + Switch + Switch 2 + PS5 Pro + PC RTX + Voxelizer-FX",
+        disciplineMode = MasterDisciplineMode.MAXIMALIST_PRETTY,
+        platformIds = pick("snes_sfc", "gba_agb", "nintendo_ds_dsi", "nintendo_switch", "nintendo_switch_2", "ps5_pro", "pc_rtx_modern", "voxelizer_fx"),
+        enableAllExtraPretty = true,
+      ),
+      HardwareRuntimePreset(
+        id = "combo_retro_computer_synth",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "Retro Computer & Synth (${computersAll.size} Systems)",
+        subtitle = "C64 SID + Amiga + PC-98 + X68000 + MSX2 + DOS VGA/3dfx",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = computersAll.ifEmpty { pick("commodore_64", "amiga_aga", "nec_pc98", "sharp_x68000", "msx_msx2", "dos_vga_voodoo") },
+      ),
+      HardwareRuntimePreset(
+        id = "combo_nintendo_timeline",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "Nintendo Full Timeline (${nintendoAll.size} Systems)",
+        subtitle = "Every Nintendo console, handheld & chip from NES/DMG to Switch 2",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = nintendoAll.ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds },
+      ),
+      HardwareRuntimePreset(
+        id = "combo_sega_timeline",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "Sega Full Timeline (${segaAll.size} Systems)",
+        subtitle = "SG-1000, Master System, Genesis, Sega CD, 32X, Saturn, Dreamcast & Arcade",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = segaAll.ifEmpty { pick("sega_genesis", "sega_32x", "sega_saturn", "dreamcast") },
+      ),
+      HardwareRuntimePreset(
+        id = "combo_arcade_cabinet_all",
+        section = HardwareRuntimeSection.CURATED_COMBO,
+        label = "All Arcade Cabinets (${arcadeAll.size} Systems)",
+        subtitle = "Every classic arcade board from Vector/CPS/Neo Geo to Sega Model 2/3 & Naomi",
+        disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+        platformIds = arcadeAll.ifEmpty { pick("neo_geo_aes", "capcom_cps2", "sega_super_scaler") },
+      ),
+    )
+  }
+
+  fun buildCategoryAndEraPresets(allPlatforms: List<HardwarePlatformSpec>): List<HardwareRuntimePreset> {
+    val result = mutableListOf<HardwareRuntimePreset>()
+    allPlatforms.groupBy { it.category }.toSortedMap().forEach { (cat, list) ->
+      result.add(
+        HardwareRuntimePreset(
+          id = "cat_${cat.lowercase().replace("[^a-z0-9]".toRegex(), "_")}",
+          section = HardwareRuntimeSection.CATEGORY_OR_ERA,
+          label = "Category: $cat (${list.size})",
+          subtitle = list.take(3).joinToString(" • ") { it.name },
+          disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+          platformIds = list.map { it.id }.toSet(),
+        )
+      )
+    }
+    allPlatforms.groupBy { it.generation }.toSortedMap().forEach { (gen, list) ->
+      result.add(
+        HardwareRuntimePreset(
+          id = "era_${gen.lowercase().replace("[^a-z0-9]".toRegex(), "_")}",
+          section = HardwareRuntimeSection.CATEGORY_OR_ERA,
+          label = "Era: $gen (${list.size})",
+          subtitle = list.take(3).joinToString(" • ") { it.name },
+          disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+          platformIds = list.map { it.id }.toSet(),
+        )
+      )
+    }
+    return result
+  }
+
+  fun buildSingleSystemPuristPreset(spec: HardwarePlatformSpec): HardwareRuntimePreset =
+    HardwareRuntimePreset(
+      id = "single_${spec.id}",
+      section = HardwareRuntimeSection.INDIVIDUAL_PURIST,
+      label = "${spec.name} (${spec.year}) — Purist",
+      subtitle = "${spec.gpuChip} • ${spec.audioChip}",
+      disciplineMode = MasterDisciplineMode.RAW_HARDWARE_PURIST,
+      platformIds = setOf(spec.id),
+    )
+
+  /**
+   * 8-step live Hardware Tour showcasing distinct eras in Raw Purist mode before converging
+   * onto Ultimate Target Style (All 156 Hardware — Shovel Knight+ Curated).
+   */
+  fun buildHardwareTourSequence(allPlatforms: List<HardwarePlatformSpec>): List<HardwareRuntimePreset> {
+    val byId = allPlatforms.associateBy { it.id }
+    val tourIds = listOf(
+      "game_boy_dmg",
+      "nes_famicom",
+      "snes_sfc",
+      "gba_agb",
+      "ps1_gte",
+      "gamecube_tev",
+      "nintendo_3ds_pica200",
+    )
+    val steps = tourIds.mapNotNull { byId[it]?.let { spec -> buildSingleSystemPuristPreset(spec) } }
+    return steps + buildUltimatePresets(allPlatforms).first()
+  }
 }
 
 /**

@@ -1,31 +1,22 @@
 package com.example.data.model
 
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.IgnoreExtraProperties
-import com.google.firebase.firestore.ServerTimestamp
-
-@IgnoreExtraProperties
 data class FanGameProject(
-  @DocumentId val id: String = "",
-  val userId: String = "",
+  val id: String = "",
   val title: String = "",
   val regionName: String = "",
   val synopsis: String = "",
-  val consoleMatrixPreset: String = "Shovel Knight+ Omni-Era Fusion",
-  val activeChipsCsv: String = "SHOVEL_KNIGHT_CURATED|super_fx2,sa_1,sega_32x,sgb2_border,n64_exp_pak,msu_1,voxelizer_fx,pokecrt_rtx",
+  val consoleMatrixPreset: String = "Ultimate Target Style — All 156 Hardware",
+  val activeChipsCsv: String = "SHOVEL_KNIGHT_CURATED|ALL_ON_RECORD",
   val pixel3dBlendRatio: Long = 65L,
   val dexCount: Long = 1025L,
   val mapCount: Long = 14L,
-  val versionTag: String = "v3.0.0-PRISM",
-  @ServerTimestamp val createdAt: Timestamp? = null,
-  @ServerTimestamp val updatedAt: Timestamp? = null,
+  val versionTag: String = "v4.0.0-PRISM",
+  val createdAtMs: Long = System.currentTimeMillis(),
+  val updatedAtMs: Long = System.currentTimeMillis(),
 )
 
-@IgnoreExtraProperties
 data class CustomDexEntry(
-  @DocumentId val id: String = "",
-  val userId: String = "",
+  val id: String = "",
   val projectId: String = "",
   val dexNumber: Long = 1026L,
   val name: String = "",
@@ -46,17 +37,15 @@ data class CustomDexEntry(
   val enhancementChip: String = "Super FX2 (GSU-2)",
   val primaryHex: String = "#00F5D4",
   val secondaryHex: String = "#FF2A85",
-  @ServerTimestamp val createdAt: Timestamp? = null,
-  @ServerTimestamp val updatedAt: Timestamp? = null,
+  val createdAtMs: Long = System.currentTimeMillis(),
+  val updatedAtMs: Long = System.currentTimeMillis(),
 ) {
   val baseStatTotal: Int
     get() = (baseHp + baseAttack + baseDefense + baseSpAtk + baseSpDef + baseSpeed).toInt()
 }
 
-@IgnoreExtraProperties
 data class CustomStudioAsset(
-  @DocumentId val id: String = "",
-  val userId: String = "",
+  val id: String = "",
   val projectId: String = "",
   val name: String = "",
   val category: String = AssetCategory.SPRITES.label,
@@ -64,8 +53,8 @@ data class CustomStudioAsset(
   val chipAddon: String = "Super FX2 + Voxelizer-FX",
   val spriteSeedId: Long = 25L,
   val shaderFormula: String = "BLEND:65|VOXEL:70|CRT:30|BLOOM:85",
-  @ServerTimestamp val createdAt: Timestamp? = null,
-  @ServerTimestamp val updatedAt: Timestamp? = null,
+  val createdAtMs: Long = System.currentTimeMillis(),
+  val updatedAtMs: Long = System.currentTimeMillis(),
 )
 
 enum class AssetCategory(val id: String, val label: String, val badge: String) {
@@ -161,7 +150,7 @@ data class ConsoleEraLayer(
 )
 
 data class ConsoleFusionConfig(
-  val presetName: String = "Shovel Knight+ Omni-Era Fusion",
+  val presetName: String = "Ultimate Target Style — All 156 Hardware",
   val pixelTo3dBlend: Float = 0.65f,
   val voxelExtrusionDepth: Float = 0.72f,
   val crtScanlineIntensity: Float = 0.24f,
@@ -177,7 +166,7 @@ data class ConsoleFusionConfig(
     "sa_1",
     "sega_32x",
     "sgb2_border",
-    "n64_exp_pak",
+    "n64_rcp",
     "msu_1",
     "voxelizer_fx",
     "pokecrt_rtx",
@@ -227,15 +216,15 @@ object ConsoleHardwareCatalog {
       accentHex = "#38BDF8",
     ),
     ConsoleChipAddon(
-      id = "n64_exp_pak",
-      name = "N64 64DD + 8MB Expansion Pak",
-      systemOrigin = "Nintendo 64 RCP Microcode Add-On",
+      id = "n64_rcp",
+      name = "N64 RCP + 8MB Expansion Pak",
+      systemOrigin = "Nintendo 64 Reality Coprocessor",
       isFanMade = false,
       effectSummary = "Z-buffered trilinear Stadium-grade 3D vertex lighting & specular rim glow",
       accentHex = "#10B981",
     ),
     ConsoleChipAddon(
-      id = "e_reader_gba",
+      id = "gba_e_reader",
       name = "GBA e-Reader + GameCube Link",
       systemOrigin = "32-Bit AGB + Dolphin TEV Bridge",
       isFanMade = false,
@@ -245,7 +234,7 @@ object ConsoleHardwareCatalog {
     ConsoleChipAddon(
       id = "msu_1",
       name = "MSU-1 Media Enhancement Chip",
-      systemOrigin = "Fan-Made FPGA Cartridge Co-Processor (byuu)",
+      systemOrigin = "Fan-Made FPGA Cartridge Co-Processor",
       isFanMade = true,
       effectSummary = "4GB address bus for 44.1kHz orchestral PCM audio & full-motion shader backgrounds",
       accentHex = "#EC4899",

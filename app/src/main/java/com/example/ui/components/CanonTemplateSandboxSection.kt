@@ -215,7 +215,7 @@ fun CanonTemplateSandboxSection(
           Icon(imageVector = Icons.Default.CloudUpload, contentDescription = null)
           Spacer(modifier = Modifier.width(8.dp))
           Text(
-            text = if (isSavingProject) "Provisioning to Firestore..." else "Create Active Project from Master Canon Template",
+            text = if (isSavingProject) "Provisioning to Local Room Vault..." else "Create Active Project from Master Canon Template",
             fontWeight = FontWeight.Bold,
           )
         }

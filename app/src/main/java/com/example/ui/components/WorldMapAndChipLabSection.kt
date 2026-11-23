@@ -6,8 +6,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,10 +52,10 @@ import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
 
 /**
- * Interactive Multi-Console Seamless Auto-Tiled HD-2D Map Editor.
- * Supports all 14 playable regions with real Room SQLite persistence per project + region,
- * drag-to-paint strokes, and canonical tile legend alignment with GameTestSection.
+ * Interactive 16x16 Seamless Auto-Tiled HD-2D Map Composer across all 14 custom source-inspired regions.
+ * Supports all 12 terrain/landmark brushes, drag-to-paint strokes, and Room SQLite auto-saving.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WorldMapAndChipLabSection(
   activeRegionId: String,
@@ -71,14 +72,19 @@ fun WorldMapAndChipLabSection(
     ?: MasterCanonTemplateCatalog.worldChapters.first()
   val regionAccent = parseHexColorSafe(activeChapter.regionAccentHex, CyberCyan)
 
-  // Canonical 6-tile legend aligned with CanonWorldProgressionTemplate, AutoTileMapCanvas, and UniversalGameFeelEngine
   val brushes = listOf(
-    0 to ("0: Meadow Plains" to SgbEmerald),
-    1 to ("1: Tall Wild Grass" to Color(0xFF22C55E)),
-    2 to ("2: Ocean / Water" to Mode7Sky),
+    0 to ("0: Meadow" to SgbEmerald),
+    1 to ("1: Wild Grass" to Color(0xFF22C55E)),
+    2 to ("2: Water" to Mode7Sky),
     3 to ("3: Route Road" to SuperFxGold),
-    4 to ("4: Volcanic Rift" to ElectricCrimson),
-    5 to ("5: Prism Sanctuary" to VoxelViolet),
+    4 to ("4: Rift Lava" to ElectricCrimson),
+    5 to ("5: Sanctuary" to CyberCyan),
+    6 to ("6: Canopy" to Color(0xFF16A34A)),
+    7 to ("7: Bridge" to Color(0xFFD97706)),
+    8 to ("8: Heal Plaza" to Color(0xFF10B981)),
+    9 to ("9: Wild Biome" to Color(0xFFEAB308)),
+    10 to ("10: Landmark" to Color(0xFFF43F5E)),
+    11 to ("11: Warp Gate" to VoxelViolet),
   )
 
   Card(
@@ -99,10 +105,12 @@ fun WorldMapAndChipLabSection(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "SEAMLESS AUTO-TILED HD-2D MAP COMPOSER • ROOM AUTO-SAVED",
+            text = "16×16 AUTO-TILED HD-2D MAP COMPOSER • ${activeChapter.biomeStyle.label.uppercase()}",
             style = MaterialTheme.typography.labelSmall,
             color = CyberCyan,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
           Text(
             text = activeChapter.regionName,
@@ -157,55 +165,44 @@ fun WorldMapAndChipLabSection(
         }
       }
 
-      // Terrain Brush Selector (2 rows of 3)
-      Row(
+      // All 12 Terrain & Landmark Brushes (scrollable horizontal palette or FlowRow)
+      FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        brushes.take(3).forEach { (id, pair) ->
+        brushes.forEach { (id, pair) ->
           BrushChip(
             tileType = id,
             label = pair.first,
             color = pair.second,
             selected = selectedBrush == id,
             onClick = { onSelectBrush(id) },
-            modifier = Modifier.weight(1f),
-          )
-        }
-      }
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        brushes.drop(3).forEach { (id, pair) ->
-          BrushChip(
-            tileType = id,
-            label = pair.first,
-            color = pair.second,
-            selected = selectedBrush == id,
-            onClick = { onSelectBrush(id) },
-            modifier = Modifier.weight(1f),
           )
         }
       }
 
-      // Seamless Zero-Gap Drag-to-Paint AutoTileMapCanvas
+      // Full 16x16 Drag-to-Paint AutoTileMapCanvas
       AutoTileMapCanvas(
         tiles = mapGrid,
-        gridSize = 8,
+        gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE,
+        viewportSize = null,
+        biomeStyle = activeChapter.biomeStyle,
+        pointsOfInterest = activeChapter.pointsOfInterest,
         waterCausticsEnabled = convergedVisuals.waterCausticsEnabled,
         weatherParticlesEnabled = convergedVisuals.weatherParticlesEnabled,
         volumetricRaysEnabled = convergedVisuals.volumetricRaysEnabled,
         weather = activeChapter.weatherPreset,
         regionAccentColor = regionAccent,
         showGridOverlay = true,
+        showMinimap = false,
         enableDragPaint = true,
         onTileTappedOrPainted = onPaintTile,
         testTagPrefix = "world_map_editor_canvas",
       )
 
       Text(
-        text = "Drag or tap cells to paint seamless auto-tiled shorelines, roads, wild grass & Prism Sanctuaries. Edits auto-save to Room and appear live in Game Test!",
+        text = "Full 16×16 (256-tile) custom source-inspired map with ${activeChapter.pointsOfInterest.size} interactive NPCs/POIs. Drag or tap to paint; edits auto-save to Room and stream live into Game Test!",
         style = MaterialTheme.typography.bodySmall,
         color = StudioTextSecondary,
       )
@@ -229,7 +226,7 @@ private fun BrushChip(
       .background(if (selected) color.copy(alpha = 0.24f) else StudioDeepNavy)
       .border(1.2.dp, if (selected) color else StudioBorderDark, RoundedCornerShape(10.dp))
       .clickable(onClick = onClick)
-      .padding(horizontal = 6.dp)
+      .padding(horizontal = 8.dp)
       .testTag("map_brush_$tileType"),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.Center,

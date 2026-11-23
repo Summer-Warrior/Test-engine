@@ -305,12 +305,17 @@ fun CategorizedAssetSidebar(
 
   Surface(
     modifier = modifier
+      .then(if (isCompactDrawerMode) Modifier.fillMaxWidth() else Modifier)
       .fillMaxHeight()
       .border(width = 1.dp, color = StudioBorderDark)
       .testTag("categorized_asset_sidebar"),
     color = StudioSurfaceDark,
   ) {
-    Row(modifier = Modifier.fillMaxHeight()) {
+    Row(
+      modifier = Modifier
+        .then(if (isCompactDrawerMode) Modifier.fillMaxWidth() else Modifier)
+        .fillMaxHeight(),
+    ) {
       // Permanent Icon Category & Project Rail (Always visible)
       Column(
         modifier = Modifier
@@ -431,10 +436,13 @@ fun CategorizedAssetSidebar(
       }
 
       // Permanent Expandable Navigation Drawer Pane
-      AnimatedVisibility(visible = isExpanded) {
+      AnimatedVisibility(
+        visible = isExpanded,
+        modifier = if (isCompactDrawerMode) Modifier.weight(1f) else Modifier,
+      ) {
         Column(
           modifier = Modifier
-            .width(214.dp)
+            .then(if (isCompactDrawerMode) Modifier.fillMaxWidth() else Modifier.width(214.dp))
             .fillMaxHeight()
             .background(StudioSurfaceDark)
             .padding(10.dp),
@@ -674,7 +682,7 @@ private fun ActiveProjectSidebarCard(
     }
 
     Text(
-      text = activeProject?.title ?: "No Cloud Project Loaded",
+      text = activeProject?.title ?: "No Local Project Loaded",
       style = MaterialTheme.typography.bodyMedium,
       fontWeight = FontWeight.Bold,
       color = StudioTextPrimary,
@@ -801,8 +809,8 @@ private fun SidebarAssetCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
           if (asset.isCustomCloud) {
             Icon(
-              imageVector = Icons.Default.CloudDone,
-              contentDescription = "Synced in Google Cloud",
+              imageVector = Icons.Default.Save,
+              contentDescription = "Saved in Local Room Vault",
               tint = CyberCyan,
               modifier = Modifier
                 .size(12.dp)
@@ -834,7 +842,7 @@ private fun SidebarAssetCard(
         ) {
           Icon(
             imageVector = Icons.Default.DeleteOutline,
-            contentDescription = "Delete Custom Cloud Asset",
+            contentDescription = "Delete Custom Vault Asset",
             tint = StudioTextSecondary,
             modifier = Modifier.size(16.dp),
           )

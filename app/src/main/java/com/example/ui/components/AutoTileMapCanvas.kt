@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -38,13 +39,22 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.engine.ConvergedVisualParams
+import com.example.engine.PoiInteractionKind
+import com.example.engine.RegionBiomeStyle
+import com.example.engine.RegionPointOfInterest
 import com.example.engine.WeatherCondition
+import com.example.ui.shaders.shovelKnightEntityEffect
 import com.example.ui.theme.CyberCyan
+import com.example.ui.theme.ElectricCrimson
+import com.example.ui.theme.SgbEmerald
 import com.example.ui.theme.StudioBorderDark
 import com.example.ui.theme.SuperFxGold
 import kotlin.math.sin
@@ -77,23 +87,115 @@ object AutoTileBitmaskSolver {
   }
 }
 
+private data class BiomePalette(
+  val meadowA: Color,
+  val meadowB: Color,
+  val grassBase: Color,
+  val grassBlade: Color,
+  val waterDeep: Color,
+  val roadBase: Color,
+  val canopyOuter: Color,
+  val canopyHighlight: Color,
+  val wildBiomeA: Color,
+  val wildBiomeB: Color,
+  val roofTint: Color,
+)
+
+private fun paletteForBiome(biome: RegionBiomeStyle): BiomePalette = when (biome) {
+  RegionBiomeStyle.TEMPERATE_MEADOW -> BiomePalette(
+    Color(0xFF1F7A43), Color(0xFF258A4D), Color(0xFF114B29), Color(0xFF4ADE80),
+    Color(0xFF0369A1), Color(0xFF334155), Color(0xFF0B3B22), Color(0xFF22C55E),
+    Color(0xFFD9A95B), Color(0xFFFDE68A), Color(0xFFDC2626),
+  )
+  RegionBiomeStyle.TROPICAL_ATOLL -> BiomePalette(
+    Color(0xFF228858), Color(0xFF2B9C68), Color(0xFF0F5943), Color(0xFF34D399),
+    Color(0xFF0284C7), Color(0xFF64748B), Color(0xFF115E59), Color(0xFF2DD4BF),
+    Color(0xFFE7C582), Color(0xFFFEF08A), Color(0xFF0EA5E9),
+  )
+  RegionBiomeStyle.AUTUMN_SHRINE -> BiomePalette(
+    Color(0xFF5D6B2A), Color(0xFF707E32), Color(0xFF4D3B16), Color(0xFFF59E0B),
+    Color(0xFF1D4ED8), Color(0xFF44403C), Color(0xFF7C2D12), Color(0xFFFB923C),
+    Color(0xFFB45309), Color(0xFFFDE047), Color(0xFFB91C1C),
+  )
+  RegionBiomeStyle.VOLCANIC_SEA -> BiomePalette(
+    Color(0xFF16804A), Color(0xFF1E9659), Color(0xFF0D4F30), Color(0xFF4ADE80),
+    Color(0xFF0077B6), Color(0xFF475569), Color(0xFF065F46), Color(0xFF10B981),
+    Color(0xFFE9C46A), Color(0xFFFEF3C7), Color(0xFF059669),
+  )
+  RegionBiomeStyle.ALPINE_SNOW -> BiomePalette(
+    Color(0xFF3B6E5C), Color(0xFF477D6B), Color(0xFF234A42), Color(0xFF6EE7B7),
+    Color(0xFF1E3A8A), Color(0xFF475569), Color(0xFF1E3A34), Color(0xFF94A3B8),
+    Color(0xFFCBD5E1), Color(0xFFF8FAFC), Color(0xFF4F46E5),
+  )
+  RegionBiomeStyle.ANCIENT_HISUI -> BiomePalette(
+    Color(0xFF4A6B4F), Color(0xFF597D5E), Color(0xFF2D4735), Color(0xFFA7F3D0),
+    Color(0xFF1E4E68), Color(0xFF57534E), Color(0xFF293B2F), Color(0xFFD6D3D1),
+    Color(0xFFD6B982), Color(0xFFFEF3C7), Color(0xFF92400E),
+  )
+  RegionBiomeStyle.NEON_METROPOLIS -> BiomePalette(
+    Color(0xFF1E4D5C), Color(0xFF255C6E), Color(0xFF0F3847), Color(0xFF38BDF8),
+    Color(0xFF0C4A6E), Color(0xFF1E293B), Color(0xFF1E1B4B), Color(0xFF6366F1),
+    Color(0xFF475569), Color(0xFF94A3B8), Color(0xFF0284C7),
+  )
+  RegionBiomeStyle.DESERT_CANYON -> BiomePalette(
+    Color(0xFF8C5A2B), Color(0xFF9E6834), Color(0xFF6B3E19), Color(0xFFF59E0B),
+    Color(0xFF0369A1), Color(0xFF57534E), Color(0xFF5C2B16), Color(0xFFEA580C),
+    Color(0xFFD99B4E), Color(0xFFFDE68A), Color(0xFF7C3AED),
+  )
+  RegionBiomeStyle.GRAND_BOULEVARD -> BiomePalette(
+    Color(0xFF247A58), Color(0xFF2D8C66), Color(0xFF14523E), Color(0xFF5EEAD4),
+    Color(0xFF0284C7), Color(0xFF3B3F5C), Color(0xFF1E3A5F), Color(0xFFF472B6),
+    Color(0xFFE2E8F0), Color(0xFFFBCFE8), Color(0xFFEC4899),
+  )
+  RegionBiomeStyle.SUNLIT_ISLAND -> BiomePalette(
+    Color(0xFF2B7A3F), Color(0xFF358C4B), Color(0xFF195229), Color(0xFF86EFAC),
+    Color(0xFF0096C7), Color(0xFF44403C), Color(0xFF14532D), Color(0xFF4ADE80),
+    Color(0xFFE9C46A), Color(0xFFFDE047), Color(0xFFF59E0B),
+  )
+  RegionBiomeStyle.STADIUM_HIGHLANDS -> BiomePalette(
+    Color(0xFF2E6B4E), Color(0xFF387A5A), Color(0xFF1B4533), Color(0xFF6EE7B7),
+    Color(0xFF1E40AF), Color(0xFF374151), Color(0xFF1E293B), Color(0xFF818CF8),
+    Color(0xFF6B7280), Color(0xFFD1D5DB), Color(0xFFBE123C),
+  )
+  RegionBiomeStyle.LANTERN_TERRACE -> BiomePalette(
+    Color(0xFF2E6E46), Color(0xFF397F53), Color(0xFF1A472C), Color(0xFF86EFAC),
+    Color(0xFF0F766E), Color(0xFF44403C), Color(0xFF14532D), Color(0xFFFACC15),
+    Color(0xFF9A6B3F), Color(0xFFFDE68A), Color(0xFF0D9488),
+  )
+  RegionBiomeStyle.CRYSTAL_CRATER -> BiomePalette(
+    Color(0xFF2D7A52), Color(0xFF378C60), Color(0xFF1B4F37), Color(0xFF5EEAD4),
+    Color(0xFF0284C7), Color(0xFF475569), Color(0xFF312E81), Color(0xFF38BDF8),
+    Color(0xFFC084FC), Color(0xFFE0F2FE), Color(0xFF2563EB),
+  )
+  RegionBiomeStyle.APEX_TERRARIUM -> BiomePalette(
+    Color(0xFF1F7A65), Color(0xFF278F77), Color(0xFF115245), Color(0xFF2DD4BF),
+    Color(0xFF0369A1), Color(0xFF334155), Color(0xFF164E63), Color(0xFF00F5D4),
+    Color(0xFFBAE6FD), Color(0xFFF0F9FF), Color(0xFF06B6D4),
+  )
+}
+
 /**
- * Seamless zero-gap 8x8 Auto-Tiled Canvas Map Renderer.
- * Renders continuous joined terrains (shorelines, road curbs, grass edges, crystal ridges)
- * with animated water caustics, HD-2D volumetric light shafts, regional weather particles,
- * and optional player avatar (or interactive drag-to-paint mode for the Map Editor).
+ * Seamless zero-gap Auto-Tiled Canvas Map Renderer supporting BOTH:
+ * - Full 16x16 interactive Map Editor mode (`viewportSize = null`)
+ * - 9x9 Scrolling Locked-Camera Overworld mode (`viewportSize = 9`) with live corner 16x16 minimap,
+ *   interactive NPC/POI beacons, HD-2D tilt, and AGSL-shaded player avatar with grounded contact shadow.
  */
 @Composable
 fun AutoTileMapCanvas(
   tiles: List<Int>,
-  gridSize: Int = 8,
+  gridSize: Int = 16,
+  viewportSize: Int? = null,
   modifier: Modifier = Modifier,
+  biomeStyle: RegionBiomeStyle = RegionBiomeStyle.TEMPERATE_MEADOW,
+  pointsOfInterest: List<RegionPointOfInterest> = emptyList(),
+  visuals: ConvergedVisualParams? = null,
   waterCausticsEnabled: Boolean = true,
   weatherParticlesEnabled: Boolean = false,
   volumetricRaysEnabled: Boolean = false,
   weather: WeatherCondition = WeatherCondition.CLEAR,
   regionAccentColor: Color = CyberCyan,
   showGridOverlay: Boolean = false,
+  showMinimap: Boolean = false,
   playerRow: Int? = null,
   playerCol: Int? = null,
   playerSpriteUrl: String? = null,
@@ -115,6 +217,26 @@ fun AutoTileMapCanvas(
 
   val currentCallback by rememberUpdatedState(onTileTappedOrPainted)
   val customImg = remember(playerCustomBitmap) { playerCustomBitmap?.asImageBitmap() }
+  val palette = remember(biomeStyle) { paletteForBiome(biomeStyle) }
+  val density = LocalDensity.current
+
+  val visibleCount = (viewportSize ?: gridSize).coerceIn(1, gridSize)
+  val camCol = if (viewportSize != null && playerCol != null) {
+    (playerCol - visibleCount / 2).coerceIn(0, (gridSize - visibleCount).coerceAtLeast(0))
+  } else {
+    0
+  }
+  val camRow = if (viewportSize != null && playerRow != null) {
+    (playerRow - visibleCount / 2).coerceIn(0, (gridSize - visibleCount).coerceAtLeast(0))
+  } else {
+    0
+  }
+
+  val hd2dTiltDeg = if (viewportSize != null && visuals != null) {
+    (visuals.affineWarp * 6.5f).coerceIn(0f, 7f)
+  } else {
+    0f
+  }
 
   BoxWithConstraints(
     modifier = modifier
@@ -123,28 +245,38 @@ fun AutoTileMapCanvas(
       .clip(RoundedCornerShape(14.dp))
       .background(Color(0xFF060B14))
       .border(1.5.dp, StudioBorderDark, RoundedCornerShape(14.dp))
+      .graphicsLayer {
+        if (hd2dTiltDeg > 0.2f) {
+          rotationX = hd2dTiltDeg
+          cameraDistance = 18f * density.density
+        }
+      }
       .testTag(testTagPrefix),
   ) {
-    val tileDp = maxWidth / gridSize.coerceAtLeast(1)
+    val tileDp = maxWidth / visibleCount.coerceAtLeast(1)
 
     Canvas(
       modifier = Modifier
         .fillMaxSize()
         .then(
           if (onTileTappedOrPainted != null) {
-            Modifier.pointerInput(gridSize, enableDragPaint) {
+            Modifier.pointerInput(gridSize, visibleCount, camCol, camRow, enableDragPaint) {
               awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 down.consume()
-                var lastIdx = ((down.position.y / size.height) * gridSize).toInt().coerceIn(0, gridSize - 1) * gridSize +
-                  ((down.position.x / size.width) * gridSize).toInt().coerceIn(0, gridSize - 1)
+                fun toMapIdx(pos: Offset): Int {
+                  val vr = ((pos.y / size.height) * visibleCount).toInt().coerceIn(0, visibleCount - 1)
+                  val vc = ((pos.x / size.width) * visibleCount).toInt().coerceIn(0, visibleCount - 1)
+                  val r = (camRow + vr).coerceIn(0, gridSize - 1)
+                  val c = (camCol + vc).coerceIn(0, gridSize - 1)
+                  return r * gridSize + c
+                }
+                var lastIdx = toMapIdx(down.position)
                 currentCallback?.invoke(lastIdx)
                 if (enableDragPaint) {
                   drag(down.id) { change ->
                     change.consume()
-                    val r = ((change.position.y / size.height) * gridSize).toInt().coerceIn(0, gridSize - 1)
-                    val c = ((change.position.x / size.width) * gridSize).toInt().coerceIn(0, gridSize - 1)
-                    val idx = r * gridSize + c
+                    val idx = toMapIdx(change.position)
                     if (idx != lastIdx) {
                       lastIdx = idx
                       currentCallback?.invoke(idx)
@@ -158,22 +290,25 @@ fun AutoTileMapCanvas(
           }
         ),
     ) {
-      val cellW = size.width / gridSize.toFloat()
-      val cellH = size.height / gridSize.toFloat()
+      val cellW = size.width / visibleCount.toFloat()
+      val cellH = size.height / visibleCount.toFloat()
 
-      for (row in 0 until gridSize) {
-        for (col in 0 until gridSize) {
-          val idx = row * gridSize + col
+      for (vr in 0 until visibleCount) {
+        val mapRow = camRow + vr
+        for (vc in 0 until visibleCount) {
+          val mapCol = camCol + vc
+          val idx = mapRow * gridSize + mapCol
           val tileType = tiles.getOrElse(idx) { 0 }
-          val mask = AutoTileBitmaskSolver.computeMask(tiles, gridSize, col, row)
-          val variant = AutoTileBitmaskSolver.variantIndex(col, row)
-          val topLeft = Offset(col * cellW, row * cellH)
+          val mask = AutoTileBitmaskSolver.computeMask(tiles, gridSize, mapCol, mapRow)
+          val variant = AutoTileBitmaskSolver.variantIndex(mapCol, mapRow)
+          val topLeft = Offset(vc * cellW, vr * cellH)
           val cellSize = Size(cellW + 0.6f, cellH + 0.6f)
 
           drawAutoTiledCell(
             tileType = tileType,
             mask = mask,
             variant = variant,
+            palette = palette,
             topLeft = topLeft,
             cellSize = cellSize,
             animPhase = animPhase,
@@ -182,10 +317,53 @@ fun AutoTileMapCanvas(
         }
       }
 
+      // Draw interactive NPC / POI markers inside visible camera window
+      val pulse = 0.7f + 0.3f * sin((animPhase * 6.283f).toDouble()).toFloat()
+      pointsOfInterest.forEach { poi ->
+        if (poi.col in camCol until (camCol + visibleCount) && poi.row in camRow until (camRow + visibleCount)) {
+          val cx = (poi.col - camCol + 0.5f) * cellW
+          val cy = (poi.row - camRow + 0.5f) * cellH
+          val badgeColor = when (poi.interactionKind) {
+            PoiInteractionKind.PROFESSOR_GUIDE -> SuperFxGold
+            PoiInteractionKind.RIVAL_OR_CHALLENGER -> ElectricCrimson
+            PoiInteractionKind.HEALER_OR_LORE -> SgbEmerald
+          }
+          // Contact shadow
+          drawOval(
+            color = Color.Black.copy(alpha = 0.55f),
+            topLeft = Offset(cx - cellW * 0.28f, cy + cellH * 0.16f),
+            size = Size(cellW * 0.56f, cellH * 0.20f),
+          )
+          // Pulsing halo ring
+          drawCircle(
+            color = badgeColor.copy(alpha = 0.38f * pulse),
+            radius = minOf(cellW, cellH) * 0.36f,
+            center = Offset(cx, cy),
+          )
+          // Crisp NPC figure badge
+          drawCircle(
+            color = Color(0xFF0A1020),
+            radius = minOf(cellW, cellH) * 0.24f,
+            center = Offset(cx, cy),
+          )
+          drawCircle(
+            color = badgeColor,
+            radius = minOf(cellW, cellH) * 0.22f,
+            center = Offset(cx, cy),
+            style = Stroke(width = 2.4f),
+          )
+          drawCircle(
+            color = Color.White,
+            radius = minOf(cellW, cellH) * 0.08f,
+            center = Offset(cx, cy - cellH * 0.03f),
+          )
+        }
+      }
+
       if (showGridOverlay) {
-        for (i in 1 until gridSize) {
-          drawLine(Color.White.copy(alpha = 0.14f), Offset(i * cellW, 0f), Offset(i * cellW, size.height), 1f)
-          drawLine(Color.White.copy(alpha = 0.14f), Offset(0f, i * cellH), Offset(size.width, i * cellH), 1f)
+        for (i in 1 until visibleCount) {
+          drawLine(Color.White.copy(alpha = 0.13f), Offset(i * cellW, 0f), Offset(i * cellW, size.height), 1f)
+          drawLine(Color.White.copy(alpha = 0.13f), Offset(0f, i * cellH), Offset(size.width, i * cellH), 1f)
         }
       }
 
@@ -218,32 +396,138 @@ fun AutoTileMapCanvas(
       }
     }
 
-    if (playerRow != null && playerCol != null && playerRow in 0 until gridSize && playerCol in 0 until gridSize) {
+    // Grounded Shovel Knight+ Overworld Player Avatar (ZERO harsh cyan rectangle border!)
+    if (playerRow != null && playerCol != null &&
+      playerRow in camRow until (camRow + visibleCount) &&
+      playerCol in camCol until (camCol + visibleCount)
+    ) {
+      val relCol = playerCol - camCol
+      val relRow = playerRow - camRow
+      val bobDp = (-sin(animPhase * 6.283f * 2f) * 2.2f).dp
+      val avatarPx = with(density) { tileDp.toPx() }
+      val shaderMod = if (visuals != null) {
+        Modifier.shovelKnightEntityEffect(
+          widthPx = avatarPx,
+          heightPx = avatarPx,
+          visuals = visuals,
+          timeSec = animPhase * 3.6f,
+          crystalGlint = 0.25f,
+          hitFlash = false,
+        )
+      } else {
+        Modifier
+      }
+
       Box(
         modifier = Modifier
-          .offset(x = tileDp * playerCol, y = tileDp * playerRow)
+          .offset(x = tileDp * relCol, y = tileDp * relRow)
           .size(tileDp)
-          .clip(RoundedCornerShape(8.dp))
-          .background(CyberCyan.copy(alpha = 0.24f))
-          .border(2.dp, SuperFxGold, RoundedCornerShape(8.dp))
           .testTag("autotile_player_avatar"),
         contentAlignment = Alignment.Center,
       ) {
-        if (customImg != null) {
-          Image(
-            bitmap = customImg,
-            contentDescription = "Trainer Custom Sprite",
-            filterQuality = FilterQuality.None,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.size(tileDp * 0.86f),
+        // Grounded elliptical contact shadow
+        Canvas(
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .size(width = tileDp * 0.72f, height = tileDp * 0.24f),
+        ) {
+          drawOval(
+            brush = Brush.radialGradient(
+              colors = listOf(
+                Color.Black.copy(alpha = 0.72f),
+                SuperFxGold.copy(alpha = 0.18f),
+                Color.Transparent,
+              ),
+            ),
           )
-        } else if (!playerSpriteUrl.isNullOrBlank()) {
-          AsyncImage(
-            model = playerSpriteUrl,
-            contentDescription = "Trainer Partner Sprite",
-            filterQuality = FilterQuality.None,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.size(tileDp * 0.88f),
+        }
+        Box(
+          modifier = Modifier
+            .size(tileDp * 0.94f)
+            .offset(y = bobDp)
+            .then(shaderMod),
+          contentAlignment = Alignment.Center,
+        ) {
+          if (customImg != null) {
+            Image(
+              bitmap = customImg,
+              contentDescription = "Trainer Custom Sprite",
+              filterQuality = FilterQuality.None,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          } else if (!playerSpriteUrl.isNullOrBlank()) {
+            AsyncImage(
+              model = playerSpriteUrl,
+              contentDescription = "Trainer Partner Sprite",
+              filterQuality = FilterQuality.None,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          }
+        }
+      }
+    }
+
+    // Live Corner 16x16 Minimap Overlay in Scrolling Overworld Mode
+    if (showMinimap && gridSize >= 12) {
+      Canvas(
+        modifier = Modifier
+          .align(Alignment.TopEnd)
+          .padding(8.dp)
+          .size(68.dp)
+          .clip(RoundedCornerShape(8.dp))
+          .background(Color(0xCC060A14))
+          .border(1.2.dp, CyberCyan.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
+          .padding(3.dp)
+          .testTag("overworld_minimap"),
+      ) {
+        val cw = size.width / gridSize.toFloat()
+        val ch = size.height / gridSize.toFloat()
+        for (r in 0 until gridSize) {
+          for (c in 0 until gridSize) {
+            val t = tiles.getOrElse(r * gridSize + c) { 0 }
+            val col = when (t) {
+              0 -> palette.meadowA
+              1 -> palette.grassBase
+              2 -> palette.waterDeep
+              3 -> Color(0xFF94A3B8)
+              4 -> Color(0xFFEF4444)
+              5 -> CyberCyan
+              6 -> palette.canopyOuter
+              7 -> Color(0xFFB45309)
+              8 -> SgbEmerald
+              9 -> palette.wildBiomeA
+              10 -> palette.roofTint
+              11 -> Color(0xFFA855F7)
+              else -> palette.meadowA
+            }
+            drawRect(col, Offset(c * cw, r * ch), Size(cw + 0.5f, ch + 0.5f))
+          }
+        }
+        // Camera viewport rectangle
+        if (viewportSize != null) {
+          drawRect(
+            color = Color.White.copy(alpha = 0.65f),
+            topLeft = Offset(camCol * cw, camRow * ch),
+            size = Size(visibleCount * cw, visibleCount * ch),
+            style = Stroke(width = 1.2f),
+          )
+        }
+        // NPC pins
+        pointsOfInterest.forEach { poi ->
+          drawCircle(
+            color = SuperFxGold,
+            radius = cw * 0.55f,
+            center = Offset((poi.col + 0.5f) * cw, (poi.row + 0.5f) * ch),
+          )
+        }
+        // Player dot
+        if (playerCol != null && playerRow != null) {
+          drawCircle(
+            color = Color.White,
+            radius = cw * 0.75f,
+            center = Offset((playerCol + 0.5f) * cw, (playerRow + 0.5f) * ch),
           )
         }
       }
@@ -255,6 +539,7 @@ private fun DrawScope.drawAutoTiledCell(
   tileType: Int,
   mask: Int,
   variant: Int,
+  palette: BiomePalette,
   topLeft: Offset,
   cellSize: Size,
   animPhase: Float,
@@ -268,96 +553,79 @@ private fun DrawScope.drawAutoTiledCell(
   val hasE = (mask and AutoTileBitmaskSolver.BIT_EAST) != 0
   val hasS = (mask and AutoTileBitmaskSolver.BIT_SOUTH) != 0
   val hasW = (mask and AutoTileBitmaskSolver.BIT_WEST) != 0
-  val edgeW = (minOf(w, h) * 0.14f).coerceAtLeast(2.5f)
+  val edgeW = (minOf(w, h) * 0.14f).coerceAtLeast(2.0f)
 
   when (tileType) {
     0 -> {
-      // 0 = Meadow Plains (Walkable safe ground)
-      val baseColor = when (variant) {
-        0 -> Color(0xFF1F7A43)
-        1 -> Color(0xFF228248)
-        2 -> Color(0xFF1C703D)
-        else -> Color(0xFF258A4D)
-      }
+      // 0 = Meadow Plains
+      val baseColor = if (variant % 2 == 0) palette.meadowA else palette.meadowB
       drawRect(baseColor, topLeft, cellSize)
-      val edgeColor = Color(0xFF155730)
-      if (!hasN) drawRect(edgeColor, Offset(x, y), Size(w, edgeW * 0.45f))
-      if (!hasS) drawRect(edgeColor, Offset(x, y + h - edgeW * 0.45f), Size(w, edgeW * 0.45f))
-      if (!hasW) drawRect(edgeColor, Offset(x, y), Size(edgeW * 0.45f, h))
-      if (!hasE) drawRect(edgeColor, Offset(x + w - edgeW * 0.45f, y), Size(edgeW * 0.45f, h))
-
-      // Subtle meadow pebble / wildflower micro-variants
+      val edgeColor = Color.Black.copy(alpha = 0.18f)
+      if (!hasN) drawRect(edgeColor, Offset(x, y), Size(w, edgeW * 0.4f))
+      if (!hasS) drawRect(edgeColor, Offset(x, y + h - edgeW * 0.4f), Size(w, edgeW * 0.4f))
+      if (!hasW) drawRect(edgeColor, Offset(x, y), Size(edgeW * 0.4f, h))
+      if (!hasE) drawRect(edgeColor, Offset(x + w - edgeW * 0.4f, y), Size(edgeW * 0.4f, h))
       if (variant == 1) {
-        drawCircle(Color(0xFFFDE047), radius = 2.1f, center = Offset(x + w * 0.62f, y + h * 0.34f))
+        drawCircle(Color(0xFFFDE047), radius = 1.9f, center = Offset(x + w * 0.62f, y + h * 0.34f))
       } else if (variant == 3) {
-        drawCircle(Color(0xFF93C5FD), radius = 2.0f, center = Offset(x + w * 0.30f, y + h * 0.64f))
-      } else {
-        drawLine(Color(0xFF4ADE80).copy(alpha = 0.55f), Offset(x + w * 0.35f, y + h * 0.55f), Offset(x + w * 0.40f, y + h * 0.42f), 1.4f)
+        drawCircle(Color(0xFF93C5FD), radius = 1.8f, center = Offset(x + w * 0.30f, y + h * 0.64f))
       }
     }
 
     1 -> {
-      // 1 = Tall Wild Grass (Wild Pokémon Encounter Patch)
-      val baseColor = when (variant) {
-        0 -> Color(0xFF114B29)
-        1 -> Color(0xFF14532D)
-        2 -> Color(0xFF0E4425)
-        else -> Color(0xFF165B32)
-      }
-      drawRect(baseColor, topLeft, cellSize)
-      val edgeColor = Color(0xFF082E18)
-      if (!hasN) drawRect(edgeColor, Offset(x, y), Size(w, edgeW * 0.7f))
-      if (!hasS) drawRect(edgeColor, Offset(x, y + h - edgeW * 0.7f), Size(w, edgeW * 0.7f))
-      if (!hasW) drawRect(edgeColor, Offset(x, y), Size(edgeW * 0.7f, h))
-      if (!hasE) drawRect(edgeColor, Offset(x + w - edgeW * 0.7f, y), Size(edgeW * 0.7f, h))
+      // 1 = Tall Wild Grass
+      drawRect(palette.grassBase, topLeft, cellSize)
+      val edgeColor = Color.Black.copy(alpha = 0.28f)
+      if (!hasN) drawRect(edgeColor, Offset(x, y), Size(w, edgeW * 0.6f))
+      if (!hasS) drawRect(edgeColor, Offset(x, y + h - edgeW * 0.6f), Size(w, edgeW * 0.6f))
+      if (!hasW) drawRect(edgeColor, Offset(x, y), Size(edgeW * 0.6f, h))
+      if (!hasE) drawRect(edgeColor, Offset(x + w - edgeW * 0.6f, y), Size(edgeW * 0.6f, h))
 
-      val sway = sin((animPhase * 6.283f + variant * 1.1f).toDouble()).toFloat() * 1.8f
-      val bladeColor = if (variant % 2 == 0) Color(0xFF4ADE80) else Color(0xFF22C55E)
+      val sway = sin((animPhase * 6.283f + variant * 1.1f).toDouble()).toFloat() * 1.5f
       val tufts = listOf(
-        Offset(x + w * 0.24f, y + h * 0.78f),
+        Offset(x + w * 0.25f, y + h * 0.78f),
         Offset(x + w * 0.52f, y + h * 0.72f),
         Offset(x + w * 0.78f, y + h * 0.80f),
       )
       tufts.forEach { base ->
         val path = Path().apply {
-          moveTo(base.x - 3.4f, base.y)
+          moveTo(base.x - 2.8f, base.y)
           lineTo(base.x + sway, base.y - h * 0.38f)
-          lineTo(base.x + 3.4f, base.y)
+          lineTo(base.x + 2.8f, base.y)
           close()
         }
-        drawPath(path, bladeColor)
+        drawPath(path, palette.grassBlade)
       }
     }
 
     2 -> {
-      // 2 = Ocean / Coast Water (Auto-tiled shoreline & animated caustics)
-      val deepWater = if (variant % 2 == 0) Color(0xFF0369A1) else Color(0xFF0284C7)
-      drawRect(deepWater, topLeft, cellSize)
+      // 2 = Ocean / Coast Water
+      drawRect(palette.waterDeep, topLeft, cellSize)
       val foamColor = Color(0xFFBAE6FD)
       val bankColor = Color(0xFFD6B982)
       if (!hasN) {
-        drawRect(bankColor, Offset(x, y), Size(w, edgeW * 0.65f))
-        drawRect(foamColor, Offset(x, y + edgeW * 0.65f), Size(w, edgeW * 0.5f))
+        drawRect(bankColor, Offset(x, y), Size(w, edgeW * 0.6f))
+        drawRect(foamColor, Offset(x, y + edgeW * 0.6f), Size(w, edgeW * 0.45f))
       }
       if (!hasS) {
-        drawRect(bankColor, Offset(x, y + h - edgeW * 0.65f), Size(w, edgeW * 0.65f))
-        drawRect(foamColor, Offset(x, y + h - edgeW * 1.15f), Size(w, edgeW * 0.5f))
+        drawRect(bankColor, Offset(x, y + h - edgeW * 0.6f), Size(w, edgeW * 0.6f))
+        drawRect(foamColor, Offset(x, y + h - edgeW * 1.05f), Size(w, edgeW * 0.45f))
       }
       if (!hasW) {
-        drawRect(bankColor, Offset(x, y), Size(edgeW * 0.65f, h))
-        drawRect(foamColor, Offset(x + edgeW * 0.65f, y), Size(edgeW * 0.5f, h))
+        drawRect(bankColor, Offset(x, y), Size(edgeW * 0.6f, h))
+        drawRect(foamColor, Offset(x + edgeW * 0.6f, y), Size(edgeW * 0.45f, h))
       }
       if (!hasE) {
-        drawRect(bankColor, Offset(x + w - edgeW * 0.65f, y), Size(edgeW * 0.65f, h))
-        drawRect(foamColor, Offset(x + w - edgeW * 1.15f, y), Size(edgeW * 0.5f, h))
+        drawRect(bankColor, Offset(x + w - edgeW * 0.6f, y), Size(edgeW * 0.6f, h))
+        drawRect(foamColor, Offset(x + w - edgeW * 1.05f, y), Size(edgeW * 0.45f, h))
       }
 
-      val drift = ((animPhase + variant * 0.25f) % 1f) * w * 0.35f
+      val drift = ((animPhase + variant * 0.25f) % 1f) * w * 0.32f
       drawLine(
         color = Color(0xFF7DD3FC).copy(alpha = 0.8f),
         start = Offset(x + w * 0.14f + drift * 0.4f, y + h * 0.38f),
         end = Offset(x + w * 0.52f + drift * 0.4f, y + h * 0.38f),
-        strokeWidth = 2.0f,
+        strokeWidth = 1.8f,
       )
       if (waterCausticsEnabled) {
         val shimmerAlpha = (0.28f + 0.25f * sin((animPhase * 6.283f + variant).toDouble()).toFloat()).coerceIn(0.1f, 0.65f)
@@ -365,43 +633,43 @@ private fun DrawScope.drawAutoTiledCell(
           color = Color.White.copy(alpha = shimmerAlpha),
           radius = minOf(w, h) * 0.14f,
           center = Offset(x + w * 0.65f - drift * 0.25f, y + h * 0.68f),
-          style = Stroke(width = 1.4f),
+          style = Stroke(width = 1.2f),
         )
       }
     }
 
     3 -> {
-      // 3 = Route Road / Cobblestone Path
-      drawRect(Color(0xFF334155), topLeft, cellSize)
-      val stoneTone = if (variant % 2 == 0) Color(0xFF475569) else Color(0xFF3E4C61)
+      // 3 = Route Road / Cobblestone
+      drawRect(palette.roadBase, topLeft, cellSize)
+      val stoneTone = Color.White.copy(alpha = if (variant % 2 == 0) 0.12f else 0.07f)
       drawRect(stoneTone, Offset(x + w * 0.08f, y + h * 0.10f), Size(w * 0.38f, h * 0.34f))
       drawRect(stoneTone, Offset(x + w * 0.52f, y + h * 0.52f), Size(w * 0.38f, h * 0.34f))
       val curb = Color(0xFF94A3B8)
-      if (!hasN) drawRect(curb, Offset(x, y), Size(w, edgeW * 0.6f))
-      if (!hasS) drawRect(curb, Offset(x, y + h - edgeW * 0.6f), Size(w, edgeW * 0.6f))
-      if (!hasW) drawRect(curb, Offset(x, y), Size(edgeW * 0.6f, h))
-      if (!hasE) drawRect(curb, Offset(x + w - edgeW * 0.6f, y), Size(edgeW * 0.6f, h))
+      if (!hasN) drawRect(curb, Offset(x, y), Size(w, edgeW * 0.55f))
+      if (!hasS) drawRect(curb, Offset(x, y + h - edgeW * 0.55f), Size(w, edgeW * 0.55f))
+      if (!hasW) drawRect(curb, Offset(x, y), Size(edgeW * 0.55f, h))
+      if (!hasE) drawRect(curb, Offset(x + w - edgeW * 0.55f, y), Size(edgeW * 0.55f, h))
       if (hasN || hasS) {
-        drawLine(SuperFxGold.copy(alpha = 0.65f), Offset(x + w * 0.5f, y + h * 0.2f), Offset(x + w * 0.5f, y + h * 0.8f), 1.6f)
+        drawLine(SuperFxGold.copy(alpha = 0.55f), Offset(x + w * 0.5f, y + h * 0.22f), Offset(x + w * 0.5f, y + h * 0.78f), 1.4f)
       } else {
-        drawLine(SuperFxGold.copy(alpha = 0.65f), Offset(x + w * 0.2f, y + h * 0.5f), Offset(x + w * 0.8f, y + h * 0.5f), 1.6f)
+        drawLine(SuperFxGold.copy(alpha = 0.55f), Offset(x + w * 0.22f, y + h * 0.5f), Offset(x + w * 0.78f, y + h * 0.5f), 1.4f)
       }
     }
 
     4 -> {
-      // 4 = Volcanic / Fracture Rift (Blocked hazard)
+      // 4 = Volcanic / Fracture Rift
       val pulse = (0.7f + 0.3f * sin((animPhase * 6.283f + variant).toDouble()).toFloat())
       drawRect(Color(0xFF7F1D1D), topLeft, cellSize)
       val rim = Color(0xFF1F2937)
-      if (!hasN) drawRect(rim, Offset(x, y), Size(w, edgeW * 0.7f))
-      if (!hasS) drawRect(rim, Offset(x, y + h - edgeW * 0.7f), Size(w, edgeW * 0.7f))
-      if (!hasW) drawRect(rim, Offset(x, y), Size(edgeW * 0.7f, h))
-      if (!hasE) drawRect(rim, Offset(x + w - edgeW * 0.7f, y), Size(edgeW * 0.7f, h))
+      if (!hasN) drawRect(rim, Offset(x, y), Size(w, edgeW * 0.65f))
+      if (!hasS) drawRect(rim, Offset(x, y + h - edgeW * 0.65f), Size(w, edgeW * 0.65f))
+      if (!hasW) drawRect(rim, Offset(x, y), Size(edgeW * 0.65f, h))
+      if (!hasE) drawRect(rim, Offset(x + w - edgeW * 0.65f, y), Size(edgeW * 0.65f, h))
       drawCircle(Color(0xFFF97316).copy(alpha = pulse), radius = minOf(w, h) * 0.28f, center = Offset(x + w * 0.5f, y + h * 0.5f))
       drawCircle(Color(0xFFFACC15), radius = minOf(w, h) * 0.11f, center = Offset(x + w * 0.5f, y + h * 0.5f))
     }
 
-    else -> {
+    5 -> {
       // 5 = Prism Sanctuary / Gym Arena
       drawRect(Color(0xFF1E1B4B), topLeft, cellSize)
       drawRect(Color(0xFF312E81), Offset(x, y), Size(w * 0.5f, h * 0.5f))
@@ -413,11 +681,87 @@ private fun DrawScope.drawAutoTiledCell(
         lineTo(x + w * 0.14f, y + h * 0.5f)
         close()
       }
-      drawPath(diamond, color = CyberCyan.copy(alpha = 0.45f + variant * 0.08f))
-      drawPath(diamond, color = Color.White.copy(alpha = 0.85f), style = Stroke(width = 1.6f))
-      if (variant == 0 || !hasN || !hasS) {
-        drawCircle(SuperFxGold, radius = minOf(w, h) * 0.10f, center = Offset(x + w * 0.5f, y + h * 0.5f))
-      }
+      drawPath(diamond, color = CyberCyan.copy(alpha = 0.52f))
+      drawPath(diamond, color = Color.White.copy(alpha = 0.85f), style = Stroke(width = 1.4f))
+      drawCircle(SuperFxGold, radius = minOf(w, h) * 0.10f, center = Offset(x + w * 0.5f, y + h * 0.5f))
+    }
+
+    6 -> {
+      // 6 = Forest Canopy / Cliff Wall (Blocked natural border)
+      drawRect(palette.canopyOuter, topLeft, cellSize)
+      drawCircle(
+        color = Color.Black.copy(alpha = 0.28f),
+        radius = minOf(w, h) * 0.42f,
+        center = Offset(x + w * 0.52f, y + h * 0.58f),
+      )
+      drawCircle(
+        color = palette.canopyHighlight.copy(alpha = 0.72f),
+        radius = minOf(w, h) * 0.36f,
+        center = Offset(x + w * 0.48f, y + h * 0.46f),
+      )
+      drawCircle(
+        color = Color.White.copy(alpha = 0.16f),
+        radius = minOf(w, h) * 0.16f,
+        center = Offset(x + w * 0.40f, y + h * 0.36f),
+      )
+    }
+
+    7 -> {
+      // 7 = Wooden Bridge / Pier (Walkable over water)
+      drawRect(palette.waterDeep, topLeft, cellSize)
+      drawRect(Color(0xFF78350F), Offset(x + w * 0.04f, y + h * 0.04f), Size(w * 0.92f, h * 0.92f))
+      drawRect(Color(0xFFB45309), Offset(x + w * 0.10f, y + h * 0.10f), Size(w * 0.80f, h * 0.80f))
+      val plankColor = Color(0xFF451A03)
+      drawLine(plankColor, Offset(x + w * 0.10f, y + h * 0.36f), Offset(x + w * 0.90f, y + h * 0.36f), 1.4f)
+      drawLine(plankColor, Offset(x + w * 0.10f, y + h * 0.64f), Offset(x + w * 0.90f, y + h * 0.64f), 1.4f)
+    }
+
+    8 -> {
+      // 8 = Town Plaza / Healing Pad (Walkable -> heals party!)
+      drawRect(Color(0xFF1E293B), topLeft, cellSize)
+      drawRect(Color(0xFF334155), Offset(x + 2f, y + 2f), Size(w - 4f, h - 4f))
+      val pulse = 0.75f + 0.25f * sin((animPhase * 6.283f).toDouble()).toFloat()
+      drawRect(SgbEmerald.copy(alpha = pulse), Offset(x + w * 0.40f, y + h * 0.18f), Size(w * 0.20f, h * 0.64f))
+      drawRect(SgbEmerald.copy(alpha = pulse), Offset(x + w * 0.18f, y + h * 0.40f), Size(w * 0.64f, h * 0.20f))
+      drawRect(Color.White.copy(alpha = 0.55f), Offset(x + 2f, y + 2f), Size(w - 4f, h - 4f), style = Stroke(1.2f))
+    }
+
+    9 -> {
+      // 9 = Sand / Snow / Wild Biome (Walkable -> wild encounters)
+      drawRect(if (variant % 2 == 0) palette.wildBiomeA else palette.wildBiomeB, topLeft, cellSize)
+      drawCircle(Color.White.copy(alpha = 0.38f), radius = 2.0f, center = Offset(x + w * 0.32f, y + h * 0.34f))
+      drawCircle(Color.Black.copy(alpha = 0.18f), radius = 1.8f, center = Offset(x + w * 0.68f, y + h * 0.68f))
+    }
+
+    10 -> {
+      // 10 = Landmark Roof / Building (Blocked)
+      drawRect(Color(0xFF1E293B), topLeft, cellSize)
+      drawRect(palette.roofTint, Offset(x + w * 0.06f, y + h * 0.08f), Size(w * 0.88f, h * 0.48f))
+      drawRect(Color.White.copy(alpha = 0.22f), Offset(x + w * 0.06f, y + h * 0.08f), Size(w * 0.88f, h * 0.14f))
+      drawRect(Color(0xFFCBD5E1), Offset(x + w * 0.12f, y + h * 0.56f), Size(w * 0.76f, h * 0.36f))
+      drawRect(Color(0xFF0EA5E9), Offset(x + w * 0.36f, y + h * 0.64f), Size(w * 0.28f, h * 0.24f))
+    }
+
+    else -> {
+      // 11 = Region Warp Gate (Walkable -> opens Warp Gate travel modal)
+      val glow = 0.65f + 0.35f * sin((animPhase * 6.283f).toDouble()).toFloat()
+      drawRect(Color(0xFF1E1B4B), topLeft, cellSize)
+      drawCircle(
+        color = Color(0xFFA855F7).copy(alpha = glow),
+        radius = minOf(w, h) * 0.38f,
+        center = Offset(x + w * 0.5f, y + h * 0.5f),
+        style = Stroke(width = 2.2f),
+      )
+      drawCircle(
+        color = CyberCyan.copy(alpha = glow),
+        radius = minOf(w, h) * 0.20f,
+        center = Offset(x + w * 0.5f, y + h * 0.5f),
+      )
+      drawCircle(
+        color = Color.White,
+        radius = minOf(w, h) * 0.08f,
+        center = Offset(x + w * 0.5f, y + h * 0.5f),
+      )
     }
   }
 }

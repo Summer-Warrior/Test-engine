@@ -3,8 +3,10 @@ package com.example
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -27,7 +29,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Dashboard
@@ -56,9 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,7 +69,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -82,7 +80,7 @@ import com.example.data.local.FranchiseEncyclopediaAndResourceRepository
 import com.example.data.local.NativeFranchiseCatalogRepository
 import com.example.data.local.NativePokemonDatabase
 import com.example.data.model.AssetCategory
-import com.example.data.repository.PokeFusionCloudRepository
+import com.example.data.repository.LocalStudioProjectRepository
 import com.example.ui.StudioViewModel
 import com.example.ui.StudioWorkspaceTab
 import com.example.ui.UiState
@@ -98,11 +96,8 @@ import com.example.ui.components.ProjectEditorDialog
 import com.example.ui.components.ProjectSwitcherDialog
 import com.example.ui.components.ResourceManagerSection
 import com.example.ui.components.SpriteEditorSection
-import com.example.ui.components.StudioAuthGateScreen
 import com.example.ui.components.WorldMapAndChipLabSection
-import com.example.ui.components.signOutUser
 import com.example.ui.theme.CyberCyan
-import com.example.ui.theme.ElectricCrimson
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.PressStart2PFamily
 import com.example.ui.theme.SgbEmerald
@@ -112,11 +107,9 @@ import com.example.ui.theme.StudioDeepNavy
 import com.example.ui.theme.StudioSurfaceDark
 import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,67 +123,45 @@ class MainActivity : ComponentActivity() {
   }
 }
 
+/**
+ * 100% Offline Room v4 Root Entrypoint — boots IMMEDIATELY into PokeFusionStudioWorkspace
+ * with ZERO login wall, ZERO Firebase/Auth dependencies, and instant offline startup.
+ */
 @Composable
 fun PokeFusionRootApp() {
-  var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
-
-  DisposableEffect(Unit) {
-    val listener = FirebaseAuth.AuthStateListener { auth ->
-      currentUser = auth.currentUser
-    }
-    Firebase.auth.addAuthStateListener(listener)
-    onDispose {
-      Firebase.auth.removeAuthStateListener(listener)
-    }
-  }
-
-  val user = currentUser
-  if (user == null) {
-    StudioAuthGateScreen(
-      onAuthSuccess = { currentUser = Firebase.auth.currentUser },
-    )
-  } else {
-    val uid = user.uid
-    val email = user.email ?: "Google Developer"
-    key(uid) {
-      val viewModel: StudioViewModel = viewModel(
-        key = uid,
-        factory = viewModelFactory {
-          initializer {
-            val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
-            val databaseId = app.getString(R.string.firestore_database_id)
-            val firestore = FirebaseFirestore.getInstance(databaseId)
-            val localDb = NativePokemonDatabase.getInstance(app)
-            StudioViewModel(
-              appContext = app.applicationContext,
-              cloudRepository = PokeFusionCloudRepository(firestore, Firebase.auth),
-              localDexRepository = NativeFranchiseCatalogRepository(localDb.pokemonDao()),
-              encyclopediaAndResourceRepository = FranchiseEncyclopediaAndResourceRepository(
-                localDb.resourceDao(),
-                localDb.encyclopediaDao(),
-              ),
-              persistenceDao = localDb.studioPersistenceDao(),
-              currentUserId = uid,
-            )
-          }
-        },
-      )
-      PokeFusionStudioWorkspace(
-        viewModel = viewModel,
-        userEmail = email,
-      )
-    }
-  }
+  val viewModel: StudioViewModel = viewModel(
+    factory = viewModelFactory {
+      initializer {
+        val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
+        val localDb = NativePokemonDatabase.getInstance(app)
+        val localProjectRepo = LocalStudioProjectRepository(
+          projectDao = localDb.fanGameProjectDao(),
+          customDexDao = localDb.customDexDao(),
+          customAssetDao = localDb.customAssetDao(),
+          studioPersistenceDao = localDb.studioPersistenceDao(),
+        )
+        StudioViewModel(
+          appContext = app.applicationContext,
+          localProjectRepository = localProjectRepo,
+          localDexRepository = NativeFranchiseCatalogRepository(localDb.pokemonDao()),
+          encyclopediaAndResourceRepository = FranchiseEncyclopediaAndResourceRepository(
+            localDb.resourceDao(),
+            localDb.encyclopediaDao(),
+          ),
+          persistenceDao = localDb.studioPersistenceDao(),
+        )
+      }
+    },
+  )
+  PokeFusionStudioWorkspace(viewModel = viewModel)
 }
 
 @Composable
 fun PokeFusionStudioWorkspace(
   viewModel: StudioViewModel,
-  userEmail: String,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
-  val credentialManager = remember { CredentialManager.create(context) }
 
   val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
   val selectedCategory by viewModel.selectedSidebarCategory.collectAsStateWithLifecycle()
@@ -223,7 +194,6 @@ fun PokeFusionStudioWorkspace(
   val encyclopediaSourceStatuses by viewModel.encyclopediaSourceStatuses.collectAsStateWithLifecycle()
   val isSyncingSources by viewModel.isSyncingSources.collectAsStateWithLifecycle()
 
-  // Hoisted Phase 1-5 Workspace State Flows
   val hardwareState by viewModel.hardwareRegistryState.collectAsStateWithLifecycle()
   val audioState by viewModel.audioConsoleState.collectAsStateWithLifecycle()
   val spriteEditorState by viewModel.spriteEditorState.collectAsStateWithLifecycle()
@@ -233,7 +203,62 @@ fun PokeFusionStudioWorkspace(
   val studioItems by viewModel.studioItems.collectAsStateWithLifecycle()
   val atlasProgressMap by viewModel.atlasProgressMap.collectAsStateWithLifecycle()
 
-  // Clean audio lifecycle management (stop active BGM on background; rely on Firestore .snapshots() instead of ON_RESUME server spam)
+  // Android Storage Access Framework JSON Project Export Launcher (zero broad storage permissions)
+  val exportJsonLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.CreateDocument("application/json"),
+  ) { uri ->
+    if (uri != null) {
+      scope.launch {
+        try {
+          val jsonPayload = viewModel.exportActiveProjectJson().getOrThrow()
+          withContext(Dispatchers.IO) {
+            context.contentResolver.openOutputStream(uri)?.use { stream ->
+              stream.write(jsonPayload.toByteArray(Charsets.UTF_8))
+              stream.flush()
+            } ?: error("Unable to open output stream for selected file.")
+          }
+          viewModel.notifyStatusBanner("Exported active studio project bundle (.json) cleanly.")
+        } catch (t: Throwable) {
+          viewModel.notifyStatusBanner("Export failed: ${t.message}")
+        }
+      }
+    }
+  }
+
+  // Android Storage Access Framework JSON Project Import Launcher
+  val importJsonLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenDocument(),
+  ) { uri ->
+    if (uri != null) {
+      scope.launch {
+        try {
+          val rawJson = withContext(Dispatchers.IO) {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+              stream.bufferedReader(Charsets.UTF_8).readText()
+            } ?: error("Unable to read selected JSON file.")
+          }
+          viewModel.importProjectFromJson(rawJson)
+        } catch (t: Throwable) {
+          viewModel.notifyStatusBanner("Import failed: ${t.message}")
+        }
+      }
+    }
+  }
+
+  val launchExportJson: () -> Unit = {
+    val slug = (activeProject?.title ?: "pokefusion_studio_project")
+      .lowercase()
+      .replace(Regex("[^a-z0-9]+"), "_")
+      .trim('_')
+      .ifBlank { "pokefusion_studio_project" }
+    exportJsonLauncher.launch("${slug}_v4.json")
+  }
+
+  val launchImportJson: () -> Unit = {
+    importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+  }
+
+  // Clean audio lifecycle management (stop active BGM cleanly on background)
   LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
     viewModel.onAppStopped()
   }
@@ -249,7 +274,7 @@ fun PokeFusionStudioWorkspace(
 
   val customAssetsList = (customAssetsState as? UiState.Success)?.data ?: emptyList()
   val customDexList = (customDexState as? UiState.Success)?.data ?: emptyList()
-  val cloudProjectsList = (cloudFanGamesState as? UiState.Success)?.data ?: emptyList()
+  val localProjectsList = (cloudFanGamesState as? UiState.Success)?.data ?: emptyList()
 
   Scaffold(
     modifier = Modifier
@@ -365,7 +390,7 @@ fun PokeFusionStudioWorkspace(
                       overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                      text = "${hardwareState.convergedVisuals.activeCount} HW • ${syncStatus.statusLabel} • $userEmail",
+                      text = "${hardwareState.convergedVisuals.activeCount}/${hardwareState.allPlatforms.size} HW • ${syncStatus.statusLabel} • Offline Room v4",
                       style = MaterialTheme.typography.labelSmall,
                       color = StudioTextSecondary,
                       maxLines = 1,
@@ -376,7 +401,7 @@ fun PokeFusionStudioWorkspace(
 
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(2.dp),
+                  horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                   IconButton(
                     enabled = !syncStatus.isSyncing,
@@ -392,7 +417,7 @@ fun PokeFusionStudioWorkspace(
                     } else {
                       Icon(
                         imageVector = Icons.Default.Sync,
-                        contentDescription = "Refresh live studio updates",
+                        contentDescription = "Refresh local Room database and Pokédex sources",
                         tint = CyberCyan,
                       )
                     }
@@ -417,23 +442,6 @@ fun PokeFusionStudioWorkspace(
                       text = "Playtest",
                       style = MaterialTheme.typography.labelLarge,
                       fontWeight = FontWeight.Bold,
-                    )
-                  }
-
-                  IconButton(
-                    onClick = {
-                      viewModel.onAppStopped()
-                      signOutUser(
-                        credentialManager = credentialManager,
-                        scope = scope,
-                      )
-                    },
-                    modifier = Modifier.testTag("sign_out_button"),
-                  ) {
-                    Icon(
-                      imageVector = Icons.AutoMirrored.Filled.Logout,
-                      contentDescription = "Sign Out",
-                      tint = ElectricCrimson,
                     )
                   }
                 }
@@ -562,7 +570,7 @@ fun PokeFusionStudioWorkspace(
                   onSelectTool = { viewModel.selectSpriteTool(it) },
                   onSelectColorSlot = { viewModel.selectSpriteColorSlot(it) },
                   onUpdatePaletteSlot = { slot, argb -> viewModel.updateSpritePaletteSlot(slot, argb) },
-                  onApplyPresetPalette = { viewModel.applySpritePresetPalette(it) },
+                  onApplyPresetPaletteValues = { viewModel.applySpritePresetPaletteValues(it) },
                   onUpdateSpriteName = { viewModel.updateSpriteName(it) },
                   onToggleMirrorX = { viewModel.toggleSpriteMirrorX() },
                   onToggleShowGrid = { viewModel.toggleSpriteShowGrid() },
@@ -586,7 +594,7 @@ fun PokeFusionStudioWorkspace(
               StudioWorkspaceTab.RESOURCE_MANAGER -> {
                 ResourceManagerSection(
                   resources = roomResources,
-                  projects = cloudProjectsList,
+                  projects = localProjectsList,
                   activeProject = activeProject,
                   onDropResourceToProject = { resource, project ->
                     viewModel.assignResourceToGameProject(resource, project)
@@ -627,6 +635,14 @@ fun PokeFusionStudioWorkspace(
                   resolvePokemonByDex = { dex -> viewModel.findPokemonByDex(dex) },
                   onSelectRegion = { viewModel.selectGameTestRegion(it) },
                   onMoveOverworld = { dr, dc -> viewModel.movePlayerOnOverworld(dr, dc) },
+                  onInteractOverworld = { viewModel.interactAtCurrentPosition() },
+                  onDismissDialogue = { viewModel.dismissDialogueBanner() },
+                  onTriggerPoiBattle = { viewModel.triggerPoiBattle(it) },
+                  onWarpToRegion = { viewModel.warpToRegion(it) },
+                  onDismissWarpPicker = { viewModel.dismissWarpGatePicker() },
+                  onSelectHardwarePreset = { viewModel.applyHardwareRuntimePreset(it) },
+                  onApplyCustomHardwareCombo = { ids, mode -> viewModel.applyCustomHardwareCombo(ids, mode) },
+                  onToggleHardwareTour = { viewModel.toggleHardwareTour() },
                   onTriggerEncounter = { isBoss -> viewModel.triggerManualEncounter(isBoss) },
                   onExecuteMove = { move -> viewModel.executePlayerBattleMove(move) },
                   onToggleGimmick = { gimmick -> viewModel.toggleGameTestGimmick(gimmick) },
@@ -663,6 +679,7 @@ fun PokeFusionStudioWorkspace(
                 ProjectDashboard(
                   cloudGamesState = cloudFanGamesState,
                   projectOverviewState = projectOverviewState,
+                  allHardwarePlatforms = hardwareState.allPlatforms,
                   activeProjectId = activeProject?.id,
                   hasUnsavedChanges = hasUnsavedChanges,
                   onSavePendingChanges = { viewModel.saveActiveProjectChanges() },
@@ -675,6 +692,8 @@ fun PokeFusionStudioWorkspace(
                   },
                   onCreateNewProject = { showQuickCreateProjectDialog = true },
                   onSeedStarterProjects = { viewModel.seedStarterCloudFanGames() },
+                  onExportActiveProjectJson = launchExportJson,
+                  onImportProjectJson = launchImportJson,
                 )
               }
 
@@ -696,8 +715,8 @@ fun PokeFusionStudioWorkspace(
                   onSelectPrimary = { pkmn -> viewModel.selectPrimaryPokemon(pkmn) },
                   onSelectSecondary = { pkmn -> viewModel.selectSecondaryPokemon(pkmn) },
                   onImportFromPokeApi = { q -> viewModel.importFromNationalPokeApi(q) },
-                  onCreateCustomPokemon = { entity, syncCloud ->
-                    viewModel.saveLocalCustomPokemon(entity, syncCloud)
+                  onCreateCustomPokemon = { entity, pinToVault ->
+                    viewModel.saveLocalCustomPokemon(entity, pinToVault)
                   },
                   onDeleteCloudCustomDex = { id -> viewModel.deleteCustomDexEntry(id) },
                   onSyncEncyclopediaNow = { viewModel.syncEncyclopediaSourcesNow() },
@@ -709,6 +728,7 @@ fun PokeFusionStudioWorkspace(
               StudioWorkspaceTab.CLOUD_GAMES -> {
                 CloudFanGameHubSection(
                   cloudGamesState = cloudFanGamesState,
+                  allHardwarePlatforms = hardwareState.allPlatforms,
                   activeProject = activeProject,
                   currentFusionConfig = fusionConfig,
                   hasUnsavedChanges = hasUnsavedChanges,
@@ -748,6 +768,8 @@ fun PokeFusionStudioWorkspace(
                   onSeedStarterGames = { viewModel.seedStarterCloudFanGames() },
                   onProvisionMasterTemplate = { viewModel.provisionMasterCanonBaseProject() },
                   onDeleteGame = { id -> viewModel.deleteCloudFanGame(id) },
+                  onExportActiveProjectJson = launchExportJson,
+                  onImportProjectJson = launchImportJson,
                 )
               }
 

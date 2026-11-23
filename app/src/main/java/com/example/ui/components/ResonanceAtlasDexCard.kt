@@ -52,6 +52,7 @@ import coil.compose.AsyncImage
 import com.example.data.local.AtlasProgressEntity
 import com.example.data.local.AtlasSpeciesIndexItem
 import com.example.data.local.NationalAtlasIndex
+import com.example.data.local.NativePokemonEntity
 import com.example.engine.MasterCanonTemplateCatalog
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.Mode7Sky
@@ -74,13 +75,15 @@ import com.example.ui.theme.VoxelViolet
  */
 @Composable
 fun ResonanceAtlasDexCard(
+  nativeList: List<NativePokemonEntity> = emptyList(),
   atlasProgressMap: Map<Int, AtlasProgressEntity>,
   isSyncingPokeApi: Boolean,
   onHydrateFromPokeApi: (String) -> Unit,
   onPlaySpeciesCry: (AtlasSpeciesIndexItem) -> Unit,
   onHarmonizeSpecies: (Int) -> Unit,
 ) {
-  val fullIndex = remember { NationalAtlasIndex.buildCompleteIndex() }
+  val hydratedByDex = remember(nativeList) { nativeList.associateBy { it.dexNumber } }
+  val fullIndex = remember(hydratedByDex) { NationalAtlasIndex.buildCompleteIndex(hydratedByDex) }
   var selectedAtlasTab by remember { mutableIntStateOf(0) }
   var atlasQuery by remember { mutableStateOf("") }
   var selectedRegionId by remember { mutableStateOf("kanto") }

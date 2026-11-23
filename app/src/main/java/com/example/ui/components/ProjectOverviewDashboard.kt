@@ -55,14 +55,14 @@ import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
-import com.google.firebase.Timestamp
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
  * Project Overview Dashboard component displaying real-time statistics
  * (Asset Count, Last Modified, Maps/Dex, and 2D/3D Fusion Blend)
- * streamed directly from Cloud Firestore for the currently selected project.
+ * streamed directly from the Local Offline Room v4 Database for the currently selected project.
  */
 @Composable
 fun ProjectOverviewDashboard(
@@ -167,7 +167,7 @@ fun ProjectOverviewDashboard(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-              text = "Streaming live statistics from Firestore...",
+              text = "Loading live project statistics from Room DB...",
               style = MaterialTheme.typography.bodyMedium,
               color = StudioTextSecondary,
             )
@@ -197,7 +197,7 @@ fun ProjectOverviewDashboard(
             ) {
               Column(modifier = Modifier.weight(1f)) {
                 Text(
-                  text = "Select or create a fan game project to view real-time Firestore asset counts and modification telemetry.",
+                  text = "Select or create a fan game project to view real-time offline Room DB asset counts and modification telemetry.",
                   style = MaterialTheme.typography.bodySmall,
                   color = StudioTextSecondary,
                 )
@@ -253,7 +253,7 @@ fun ProjectOverviewDashboard(
                 icon = Icons.Default.Inventory2,
                 label = "Asset Count",
                 primaryValue = "${stats.assetCount}",
-                subtitle = "${stats.pinnedCloudAssetsCount} Cloud • ${stats.customDexCount} Dex • ${stats.activeChipsCount} Chips",
+                subtitle = "${stats.pinnedCloudAssetsCount} Vault • ${stats.customDexCount} Dex • ${stats.activeChipsCount} HW",
                 accentColor = CyberCyan,
                 modifier = Modifier
                   .weight(1f)
@@ -262,8 +262,8 @@ fun ProjectOverviewDashboard(
               OverviewStatTile(
                 icon = Icons.Default.Schedule,
                 label = "Last Modified",
-                primaryValue = formatOverviewTimeShort(stats.lastModified),
-                subtitle = formatOverviewDateFull(stats.lastModified),
+                primaryValue = formatOverviewTimeShort(stats.lastModifiedMs),
+                subtitle = formatOverviewDateFull(stats.lastModifiedMs),
                 accentColor = SuperFxGold,
                 modifier = Modifier
                   .weight(1f)
@@ -353,7 +353,7 @@ fun ProjectOverviewDashboard(
                     modifier = Modifier.size(18.dp),
                   )
                   Text(
-                    text = "Local engine changes waiting to sync",
+                    text = "Local engine changes waiting to save",
                     style = MaterialTheme.typography.labelMedium,
                     color = SuperFxGold,
                     fontWeight = FontWeight.SemiBold,
@@ -369,7 +369,7 @@ fun ProjectOverviewDashboard(
                     .heightIn(min = 48.dp)
                     .testTag("overview_save_changes_button"),
                 ) {
-                  Text("Sync Now", fontWeight = FontWeight.Bold)
+                  Text("Save Now", fontWeight = FontWeight.Bold)
                 }
               }
             }
@@ -431,9 +431,10 @@ private fun OverviewStatTile(
   }
 }
 
-private fun formatOverviewTimeShort(timestamp: Timestamp?): String {
-  val date = timestamp?.toDate() ?: return "Pending..."
-  val diffSeconds = ((System.currentTimeMillis() - date.time) / 1000L).coerceAtLeast(0L)
+private fun formatOverviewTimeShort(epochMs: Long?): String {
+  if (epochMs == null || epochMs <= 0L) return "Just now"
+  val date = Date(epochMs)
+  val diffSeconds = ((System.currentTimeMillis() - epochMs) / 1000L).coerceAtLeast(0L)
   return when {
     diffSeconds < 60L -> "Just now"
     diffSeconds < 3600L -> "${diffSeconds / 60L}m ago"
@@ -442,7 +443,7 @@ private fun formatOverviewTimeShort(timestamp: Timestamp?): String {
   }
 }
 
-private fun formatOverviewDateFull(timestamp: Timestamp?): String {
-  val date = timestamp?.toDate() ?: return "Awaiting server timestamp"
-  return SimpleDateFormat("MMM d, yyyy • HH:mm:ss", Locale.getDefault()).format(date)
+private fun formatOverviewDateFull(epochMs: Long?): String {
+  if (epochMs == null || epochMs <= 0L) return "Saved locally in Room DB"
+  return SimpleDateFormat("MMM d, yyyy • HH:mm:ss", Locale.getDefault()).format(Date(epochMs))
 }

@@ -166,21 +166,29 @@ object UniversalGameFeelEngine {
   }
 
   /**
-   * Tile corner correction for 8x8 overworld traversal:
-   * If moving directly into an impassable obstacle (Water=2 or Lava=4) while an adjacent
-   * diagonal corner tile is passable, nudges the player cleanly around the corner.
+   * 12-tile passability rule:
+   * Passable: 0 (Meadow/Town), 1 (Tall Grass), 3 (Road), 5 (Prism Sanctuary),
+   *           7 (Bridge/Causeway), 8 (Healing Lab/Plaza), 9 (Wild Biome Floor), 11 (Region Warp Gate)
+   * Blocked:  2 (Deep Water), 4 (Mountain/Volcanic Ridge), 6 (Tree Canopy), 10 (Landmark Building)
+   */
+  fun isTilePassable(tile: Int): Boolean = tile != 2 && tile != 4 && tile != 6 && tile != 10
+
+  /**
+   * Tile corner correction for 16x16 (and legacy 8x8) overworld traversal:
+   * If moving directly into an impassable obstacle (Water=2, Ridge=4, Tree=6, Building=10)
+   * while an adjacent diagonal corner tile is passable, nudges the player cleanly around the corner.
    */
   fun resolveStepWithCornerCorrection(
     x: Int,
     y: Int,
     direction: MoveDirection,
-    gridSize: Int,
+    gridSize: Int = 16,
     tiles: List<Int>,
   ): Pair<Int, Int> {
     fun isPassable(nx: Int, ny: Int): Boolean {
       if (nx !in 0 until gridSize || ny !in 0 until gridSize) return false
       val tile = tiles.getOrElse(ny * gridSize + nx) { 0 }
-      return tile != 2 && tile != 4 // Water (2) and Lava/Rift wall (4) block walking
+      return isTilePassable(tile)
     }
 
     val tx = x + direction.dx

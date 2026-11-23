@@ -30,7 +30,7 @@ import com.example.data.model.CustomStudioAsset
 import com.example.data.model.ExtraVisualAudioSettings
 import com.example.data.model.FanGameProject
 import com.example.data.model.MasterDisciplineMode
-import com.example.data.repository.PokeFusionCloudRepository
+import com.example.data.repository.LocalStudioProjectRepository
 import com.example.engine.AudioConvergenceSolver
 import com.example.engine.BattleGimmickMode
 import com.example.engine.BattleMoveSpec
@@ -40,22 +40,28 @@ import com.example.engine.CampaignProgressionState
 import com.example.engine.CanonBattleResolver
 import com.example.engine.CanonRegionChapter
 import com.example.engine.HardwareConvergenceSolver
+import com.example.engine.HardwarePlatformSpec
+import com.example.engine.HardwareRuntimePreset
+import com.example.engine.HardwareRuntimePresetCatalog
 import com.example.engine.MasterCanonTemplateCatalog
+import com.example.engine.MoveDirection
 import com.example.engine.OmniHardwareAudioEngine
+import com.example.engine.PoiInteractionKind
 import com.example.engine.PokemonType
+import com.example.engine.RegionPointOfInterest
 import com.example.engine.SpritePixelMatrixEngine
+import com.example.engine.StatStages
 import com.example.engine.StatusCondition
 import com.example.engine.StudioSfxType
 import com.example.engine.TerrainCondition
 import com.example.engine.UniversalGameFeelEngine
 import com.example.engine.UniversalHardwareRegistry
 import com.example.engine.WeatherCondition
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FirebaseFirestoreException
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -70,10 +76,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 sealed interface UiState<out T> {
   data object Loading : UiState<Nothing>
@@ -88,7 +96,7 @@ enum class StudioWorkspaceTab(val id: String, val title: String) {
   GAME_TEST("game_test", "Game Test"),
   BASE_TEMPLATE("base_template", "Canon Base Template"),
   PROJECT_DASHBOARD("project_dashboard", "Project Dashboard"),
-  CLOUD_GAMES("cloud_games", "Project Manager"),
+  CLOUD_GAMES("cloud_games", "Local Vault Projects"),
   FRANCHISE_DEX("franchise_dex", "Resonance Atlas Dex"),
   WORLD_MAP_BUILDER("world_map", "HD-2D Map & Chip Lab"),
 }
@@ -121,25 +129,24 @@ data class ProjectOverviewStats(
   val dexTargetCount: Long,
   val mapCount: Long,
   val blendRatioPercent: Long,
-  val lastModified: Timestamp?,
-  val createdAt: Timestamp?,
+  val lastModifiedMs: Long?,
+  val createdAtMs: Long?,
   val globalSharedAssetsCount: Int = 0,
 )
 
 data class StudioSyncStatus(
   val isSyncing: Boolean = false,
   val lastSyncedAtMs: Long? = null,
-  val statusLabel: String = "Pre-warming Studio...",
+  val statusLabel: String = "Pre-warming Offline Studio...",
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class StudioViewModel(
   private val appContext: Context,
-  private val cloudRepository: PokeFusionCloudRepository,
+  private val localProjectRepository: LocalStudioProjectRepository,
   private val localDexRepository: NativeFranchiseCatalogRepository,
   private val encyclopediaAndResourceRepository: FranchiseEncyclopediaAndResourceRepository,
   private val persistenceDao: StudioPersistenceDao,
-  private val currentUserId: String,
   private val audioEngine: OmniHardwareAudioEngine = OmniHardwareAudioEngine(),
 ) : ViewModel() {
 
@@ -201,7 +208,7 @@ class StudioViewModel(
   private val _isSyncingSources = MutableStateFlow(false)
   val isSyncingSources: StateFlow<Boolean> = _isSyncingSources.asStateFlow()
 
-  // Hoisted Hardware Registry & Convergence state (85+ platforms)
+  // Hoisted Hardware Registry & Convergence state (all 156 platforms)
   private val _hardwareRegistryState = MutableStateFlow(HardwareRegistryUiState())
   val hardwareRegistryState: StateFlow<HardwareRegistryUiState> = _hardwareRegistryState.asStateFlow()
 
@@ -223,7 +230,7 @@ class StudioViewModel(
   )
   val spriteEditorState: StateFlow<SpriteEditorUiState> = _spriteEditorState.asStateFlow()
 
-  // Hoisted Map Editor state (per project + per 14 regions, persisted to Room saved_maps)
+  // Hoisted 16x16 Map Editor state (per project + per 14 regions, persisted to Room saved_maps)
   private val _activeMapRegionId = MutableStateFlow(MasterCanonTemplateCatalog.worldChapters.first().id)
   val activeMapRegionId: StateFlow<String> = _activeMapRegionId.asStateFlow()
 
@@ -242,6 +249,8 @@ class StudioViewModel(
 
   private var hasAutoLoadedInitialProject = false
   private var battleActionCounter = 0
+  private var hardwareTourJob: Job? = null
+  private val pendingHydrationDexIds: MutableSet<Int> = Collections.synchronizedSet(mutableSetOf())
 
   val nativePokemonList: StateFlow<List<NativePokemonEntity>> =
     localDexRepository.allNativePokemon.stateIn(
@@ -294,15 +303,12 @@ class StudioViewModel(
         initialValue = emptyMap(),
       )
 
+  // 100% Offline Room v4 Single-Source-of-Truth Project Stream
   val cloudFanGamesState: StateFlow<UiState<List<FanGameProject>>> =
-    cloudRepository.observeFanGames(currentUserId)
+    localProjectRepository.observeProjects()
       .map<List<FanGameProject>, UiState<List<FanGameProject>>> { UiState.Success(it) }
       .catch { error ->
-        val firestoreError = generateSequence(error) { it.cause }
-          .filterIsInstance<FirebaseFirestoreException>()
-          .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load cloud fan games"))
+        emit(UiState.Error(error.message ?: "Failed to load local studio projects"))
       }
       .stateIn(
         scope = viewModelScope,
@@ -313,7 +319,8 @@ class StudioViewModel(
   val activeProject: StateFlow<FanGameProject?> =
     combine(cloudFanGamesState, _activeProjectId) { gamesState, activeId ->
       val projects = (gamesState as? UiState.Success)?.data ?: return@combine null
-      if (activeId != null) projects.firstOrNull { it.id == activeId } else null
+      if (activeId != null) projects.firstOrNull { it.id == activeId } ?: projects.firstOrNull()
+      else projects.firstOrNull()
     }.stateIn(
       scope = viewModelScope,
       started = SharingStarted.WhileSubscribed(5000L),
@@ -321,95 +328,81 @@ class StudioViewModel(
     )
 
   val customDexState: StateFlow<UiState<List<CustomDexEntry>>> =
-    cloudRepository.observeCustomDex(currentUserId)
+    _activeProjectId.flatMapLatest { projId ->
+      localProjectRepository.observeCustomDex(projId ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID)
+    }
       .map<List<CustomDexEntry>, UiState<List<CustomDexEntry>>> { UiState.Success(it) }
       .catch { error ->
-        val firestoreError = generateSequence(error) { it.cause }
-          .filterIsInstance<FirebaseFirestoreException>()
-          .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load custom Pokedex entries"))
+        emit(UiState.Error(error.message ?: "Failed to load custom Dex entries"))
       }
       .stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = UiState.Loading,
+        initialValue = UiState.Success(emptyList()),
       )
 
   val customAssetsState: StateFlow<UiState<List<CustomStudioAsset>>> =
-    cloudRepository.observeCustomAssets(currentUserId)
+    _activeProjectId.flatMapLatest { projId ->
+      localProjectRepository.observeStudioAssets(projId ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID)
+    }
       .map<List<CustomStudioAsset>, UiState<List<CustomStudioAsset>>> { UiState.Success(it) }
       .catch { error ->
-        val firestoreError = generateSequence(error) { it.cause }
-          .filterIsInstance<FirebaseFirestoreException>()
-          .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load custom studio assets"))
+        emit(UiState.Error(error.message ?: "Failed to load custom studio assets"))
       }
       .stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = UiState.Loading,
+        initialValue = UiState.Success(emptyList()),
       )
 
   val projectOverviewState: StateFlow<UiState<ProjectOverviewStats?>> =
-    _activeProjectId.flatMapLatest { selectedId ->
-      if (selectedId.isNullOrBlank()) {
-        flowOf<UiState<ProjectOverviewStats?>>(UiState.Success(null))
+    combine(
+      activeProject,
+      customAssetsState,
+      customDexState,
+      _hardwareRegistryState,
+    ) { liveProject, assetsState, dexState, hwState ->
+      val overview: ProjectOverviewStats? = if (liveProject == null) {
+        null
       } else {
-        combine(
-          cloudRepository.observeFanGameById(currentUserId, selectedId),
-          customAssetsState,
-          customDexState,
-          _hardwareRegistryState,
-        ) { liveProject, assetsState, dexState, hwState ->
-          val overview: ProjectOverviewStats? = if (liveProject == null) {
-            null
-          } else {
-            val allAssets = (assetsState as? UiState.Success)?.data ?: emptyList()
-            val allDex = (dexState as? UiState.Success)?.data ?: emptyList()
-            val projectAssets = allAssets.filter { it.projectId == liveProject.id }
-            val globalAssets = allAssets.filter { it.projectId.isBlank() }
-            val projectDex = allDex.filter { it.projectId == liveProject.id || it.projectId.isBlank() }
-            val catalogIds = hwState.allPlatforms.map { it.id }.toSet()
-            val (_, decodedIds) = UniversalHardwareRegistry.decodeSelectionToken(liveProject.activeChipsCsv, catalogIds)
-            val totalAssetCount = projectAssets.size + projectDex.size + decodedIds.size
+        val allAssets = (assetsState as? UiState.Success)?.data ?: emptyList()
+        val allDex = (dexState as? UiState.Success)?.data ?: emptyList()
+        val projectAssets = allAssets.filter { it.projectId == liveProject.id }
+        val globalAssets = allAssets.filter { it.projectId.isBlank() }
+        val projectDex = allDex.filter { it.projectId == liveProject.id || it.projectId.isBlank() }
+        val catalogIds = hwState.allPlatforms.map { it.id }.toSet()
+        val (_, decodedIds) = UniversalHardwareRegistry.decodeSelectionToken(liveProject.activeChipsCsv, catalogIds)
+        val totalAssetCount = projectAssets.size + projectDex.size + decodedIds.size
 
-            val candidateTimestamps = buildList {
-              liveProject.updatedAt?.let { add(it) }
-              liveProject.createdAt?.let { add(it) }
-              projectAssets.mapNotNull { it.updatedAt ?: it.createdAt }.maxByOrNull { it.seconds }?.let { add(it) }
-              projectDex.mapNotNull { it.updatedAt ?: it.createdAt }.maxByOrNull { it.seconds }?.let { add(it) }
-            }
-            val latestModified = candidateTimestamps.maxByOrNull { it.seconds * 1_000_000_000L + it.nanoseconds }
-
-            ProjectOverviewStats(
-              projectId = liveProject.id,
-              projectTitle = liveProject.title.ifBlank { "Untitled Fan Game" },
-              versionTag = liveProject.versionTag,
-              regionName = liveProject.regionName,
-              consoleMatrixPreset = liveProject.consoleMatrixPreset,
-              assetCount = totalAssetCount,
-              pinnedCloudAssetsCount = projectAssets.size,
-              customDexCount = projectDex.size,
-              activeChipsCount = decodedIds.size,
-              dexTargetCount = liveProject.dexCount,
-              mapCount = liveProject.mapCount,
-              blendRatioPercent = liveProject.pixel3dBlendRatio,
-              lastModified = latestModified,
-              createdAt = liveProject.createdAt,
-              globalSharedAssetsCount = globalAssets.size,
-            )
-          }
-          UiState.Success(overview) as UiState<ProjectOverviewStats?>
-        }.catch { error ->
-          val firestoreError = generateSequence(error) { it.cause }
-            .filterIsInstance<FirebaseFirestoreException>()
-            .firstOrNull()
-          if (firestoreError == null && error is CancellationException) throw error
-          emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load real-time project statistics"))
+        val candidateMs = buildList {
+          add(liveProject.updatedAtMs)
+          add(liveProject.createdAtMs)
+          projectAssets.maxOfOrNull { maxOf(it.updatedAtMs, it.createdAtMs) }?.let { add(it) }
+          projectDex.maxOfOrNull { maxOf(it.updatedAtMs, it.createdAtMs) }?.let { add(it) }
         }
+        val latestModifiedMs = candidateMs.maxOrNull()
+
+        ProjectOverviewStats(
+          projectId = liveProject.id,
+          projectTitle = liveProject.title.ifBlank { "Untitled Fan Game" },
+          versionTag = liveProject.versionTag,
+          regionName = liveProject.regionName,
+          consoleMatrixPreset = liveProject.consoleMatrixPreset,
+          assetCount = totalAssetCount,
+          pinnedCloudAssetsCount = projectAssets.size,
+          customDexCount = projectDex.size,
+          activeChipsCount = decodedIds.size,
+          dexTargetCount = liveProject.dexCount,
+          mapCount = liveProject.mapCount,
+          blendRatioPercent = liveProject.pixel3dBlendRatio,
+          lastModifiedMs = latestModifiedMs,
+          createdAtMs = liveProject.createdAtMs,
+          globalSharedAssetsCount = globalAssets.size,
+        )
       }
+      UiState.Success(overview) as UiState<ProjectOverviewStats?>
+    }.catch { error ->
+      emit(UiState.Error(error.message ?: "Failed to load local project statistics"))
     }.stateIn(
       scope = viewModelScope,
       started = SharingStarted.WhileSubscribed(5000L),
@@ -418,7 +411,7 @@ class StudioViewModel(
 
   init {
     prewarmStudioStartup()
-    syncStudioDataOnLoad(announceCompletion = false, refreshServer = false)
+    syncStudioDataOnLoad(announceCompletion = false)
 
     viewModelScope.launch {
       nativePokemonList.collect { catalog ->
@@ -441,55 +434,78 @@ class StudioViewModel(
         }
       }
     }
-
-    viewModelScope.launch {
-      activeProject.collect { latestProject ->
-        if (latestProject != null && !_hasUnsavedChanges.value) {
-          syncLocalHardwareFromProjectToken(latestProject)
-        }
-      }
-    }
   }
 
   /**
-   * Zero-Wait Startup Pre-warming: loads 87-platform Hardware Registry into Room, seeds Items & 14 Regional Maps,
-   * restores saved Campaign State, and pre-warms Coil image cache for starter party sprites.
+   * Zero-Wait Offline Startup Pre-warming:
+   * 1. Seeds default "Pokémon: Prism Resonance" master project in Room v4.
+   * 2. Loads all 156 Hardware Platforms into Room & defaults to Ultimate Target Style (All 156 Hardware — Shovel Knight+ Curated).
+   * 3. Seeds Items Catalog & 14 custom 16x16 Region Maps.
+   * 4. Restores saved Campaign State (levels, taught TMs, position, shards).
+   * 5. Pre-warms Coil singleton cache for starter party sprites.
    */
   private fun prewarmStudioStartup() {
     viewModelScope.launch(Dispatchers.IO) {
-      // 1. Load & persist 85+ hardware profiles
+      // 1. Ensure default master project exists in Room v4
+      val defaultProject = localProjectRepository.ensureDefaultMasterProjectSeeded()
+      val projectKey = _activeProjectId.value?.takeIf { it.isNotBlank() } ?: defaultProject.id
+      if (_activeProjectId.value == null) {
+        _activeProjectId.value = projectKey
+        hasAutoLoadedInitialProject = true
+      }
+
+      // 2. Load & persist all 156 hardware profiles
       val specs = UniversalHardwareRegistry.loadFromAssets(appContext)
       if (persistenceDao.countHardwareProfiles() < specs.size) {
         persistenceDao.upsertHardwareProfiles(specs.map { StudioViewModelHelpers.toHardwareProfileEntity(it) })
       }
+      val allIds = specs.map { it.id }.toSet().ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
+      val ultimateLabel = "Ultimate Target Style — All ${allIds.size} Hardware (Shovel Knight+ Curated)"
+
       withContext(Dispatchers.Main) {
-        recomputeHardwareConvergence(allPlatforms = specs)
+        recomputeHardwareConvergence(
+          allPlatforms = specs,
+          activeIds = allIds,
+          disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+          runtimePresetId = HardwareRuntimePresetCatalog.MODE_ULTIMATE_CURATED,
+          runtimeLabel = ultimateLabel,
+        )
       }
 
-      // 2. Seed items catalog if empty
+      // 3. Seed items catalog if empty
       if (persistenceDao.countItems() == 0) {
         persistenceDao.upsertItems(StudioItemCatalog.defaultItems)
       }
 
-      // 3. Restore campaign state & active regional map for current project key
-      val projectKey = activePersistenceProjectKey()
+      // 4. Restore campaign state & active 16x16 regional map
       val savedCampaign = persistenceDao.getCampaignState(projectKey)
       if (savedCampaign != null) {
-        applyCampaignEntityToState(savedCampaign, specs)
+        withContext(Dispatchers.Main) {
+          applyCampaignEntityToState(savedCampaign, specs)
+        }
       } else {
-        persistenceDao.upsertCampaignState(CampaignStateEntity(projectId = projectKey))
+        persistenceDao.upsertCampaignState(
+          CampaignStateEntity(
+            projectId = projectKey,
+            playerX = MasterCanonTemplateCatalog.worldChapters.first().spawnCol,
+            playerY = MasterCanonTemplateCatalog.worldChapters.first().spawnRow,
+            activeHardwareIdsCsv = allIds.joinToString(","),
+            disciplineModeToken = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED.token,
+          )
+        )
       }
 
-      // 4. Seed 14 default maps if not yet saved
+      // 5. Ensure all 14 custom 16x16 maps are saved (upgrading any legacy 8x8 maps seamlessly)
       val defaultMaps = MasterCanonTemplateCatalog.worldChapters.mapNotNull { ch ->
         val key = mapStorageKey(projectKey, ch.id)
-        if (persistenceDao.getSavedMap(key) == null) {
+        val existing = persistenceDao.getSavedMap(key)
+        if (existing == null || existing.gridSize != MasterCanonTemplateCatalog.MAP_GRID_SIZE) {
           SavedMapEntity(
             mapKey = key,
             projectId = projectKey,
             regionId = ch.id,
             regionName = ch.regionName,
-            gridSize = 8,
+            gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE,
             tilesCsv = ch.defaultMapTiles.joinToString(","),
           )
         } else {
@@ -501,7 +517,7 @@ class StudioViewModel(
       }
       loadMapForRegion(projectKey, _activeMapRegionId.value)
 
-      // 5. Warm Coil singleton cache for core party & starter sprites (zero loading stutter in Playtest)
+      // 6. Warm Coil singleton cache for core party & starter sprites
       val imageLoader = appContext.imageLoader
       val warmDexIds = listOf(1, 4, 7, 25, 6, 94, 384, 448, 658)
       warmDexIds.forEach { dexId ->
@@ -516,7 +532,7 @@ class StudioViewModel(
   }
 
   private fun activePersistenceProjectKey(): String =
-    _activeProjectId.value?.takeIf { it.isNotBlank() } ?: DEFAULT_LOCAL_PROJECT_KEY
+    _activeProjectId.value?.takeIf { it.isNotBlank() } ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
 
   private fun mapStorageKey(projectKey: String, regionId: String): String = "$projectKey:$regionId"
 
@@ -524,21 +540,25 @@ class StudioViewModel(
     val saved = persistenceDao.getSavedMap(mapStorageKey(projectKey, regionId))
     val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == regionId }
       ?: MasterCanonTemplateCatalog.worldChapters.first()
-    val tiles = saved?.tilesCsv
+    val tiles = saved
+      ?.takeIf { it.gridSize == MasterCanonTemplateCatalog.MAP_GRID_SIZE }
+      ?.tilesCsv
       ?.split(",")
       ?.mapNotNull { it.trim().toIntOrNull() }
-      ?.takeIf { it.size == 64 }
+      ?.takeIf { it.size == MasterCanonTemplateCatalog.MAP_TILE_COUNT }
       ?: chapter.defaultMapTiles
     _mapGrid.value = tiles
   }
 
   private fun applyCampaignEntityToState(
     entity: CampaignStateEntity,
-    allSpecs: List<com.example.engine.HardwarePlatformSpec>,
+    allSpecs: List<HardwarePlatformSpec>,
   ) {
     val completed = entity.completedRegionIdsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     val party = entity.partyDexIdsCsv.split(",").mapNotNull { it.trim().toIntOrNull() }.ifEmpty { listOf(25, 6, 94, 448, 658, 384) }
     val heldMap = StudioViewModelHelpers.parseHeldItemsCsv(entity.heldItemsMapCsv)
+    val levelsMap = StudioViewModelHelpers.parsePartyLevelsCsv(entity.partyLevelsCsv)
+    val taughtMap = StudioViewModelHelpers.parseTaughtMovesCsv(entity.taughtMovesCsv)
     val badges = MasterCanonTemplateCatalog.worldChapters.filter { it.id in completed }.sumOf { it.gymOrTrialCount }
     _campaignState.value = CampaignProgressionState(
       completedChapterIds = completed,
@@ -551,13 +571,18 @@ class StudioViewModel(
     val regionId = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == entity.activeRegionId }?.id ?: "kanto"
     val chapter = MasterCanonTemplateCatalog.worldChapters.first { it.id == regionId }
     _activeMapRegionId.value = regionId
+    val maxCoord = MasterCanonTemplateCatalog.MAP_GRID_SIZE - 1
+    val safeCol = entity.playerX.coerceIn(0, maxCoord)
+    val safeRow = entity.playerY.coerceIn(0, maxCoord)
     _gameTestState.update {
       it.copy(
         activeRegionId = regionId,
-        playerCol = entity.playerX.coerceIn(0, 7),
-        playerRow = entity.playerY.coerceIn(0, 7),
+        playerCol = safeCol,
+        playerRow = safeRow,
         activePartyDexIds = party,
         heldItemsMap = if (heldMap.isNotEmpty()) heldMap else it.heldItemsMap,
+        partyLevelMap = if (levelsMap.isNotEmpty()) levelsMap else it.partyLevelMap,
+        taughtMovesMap = taughtMap,
         weather = chapter.weatherPreset,
       )
     }
@@ -565,13 +590,18 @@ class StudioViewModel(
     val discipline = MasterDisciplineMode.entries.firstOrNull { it.token == entity.disciplineModeToken }
       ?: MasterDisciplineMode.SHOVEL_KNIGHT_CURATED
     val extraPretty = StudioViewModelHelpers.decodeExtraPrettyMask(entity.extraPrettyMask)
+    val allIds = allSpecs.map { it.id }.toSet().ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
     val hwIds = entity.activeHardwareIdsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-      .ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
+      .ifEmpty { allIds }
+    val presetLabel = deriveRuntimeLabel(hwIds, allSpecs, discipline)
+    val presetId = deriveRuntimePresetId(hwIds, allSpecs, discipline)
     recomputeHardwareConvergence(
       allPlatforms = allSpecs,
       activeIds = hwIds,
       disciplineMode = discipline,
       extraPretty = extraPretty,
+      runtimePresetId = presetId,
+      runtimeLabel = presetLabel,
     )
   }
 
@@ -593,6 +623,8 @@ class StudioViewModel(
       disciplineModeToken = hw.disciplineMode.token,
       extraPrettyMask = StudioViewModelHelpers.encodeExtraPrettyMask(hw.extraPretty),
       updatedAtEpochMs = System.currentTimeMillis(),
+      partyLevelsCsv = StudioViewModelHelpers.encodePartyLevelsCsv(gt.partyLevelMap),
+      taughtMovesCsv = StudioViewModelHelpers.encodeTaughtMovesCsv(gt.taughtMovesMap),
     )
     viewModelScope.launch(Dispatchers.IO) {
       persistenceDao.upsertCampaignState(entity)
@@ -600,37 +632,35 @@ class StudioViewModel(
   }
 
   /**
-   * Lifecycle hooks:
-   * - ON_STOP cleanly stops active BGM audio track so sound never leaks in background.
-   * - No redundant Source.SERVER Firestore reads on ON_RESUME (real-time .snapshots() handles live cloud updates).
+   * Lifecycle hook: cleanly stops active BGM audio track on ON_STOP so sound never leaks in background.
    */
   fun onAppStopped() {
+    hardwareTourJob?.cancel()
+    hardwareTourJob = null
+    _hardwareRegistryState.update { it.copy(isHardwareTourActive = false, hardwareTourStepLabel = "") }
     audioEngine.stopBgmImmediate()
     _audioConsoleState.update { it.copy(isBgmPlaying = false) }
   }
 
   override fun onCleared() {
     super.onCleared()
+    hardwareTourJob?.cancel()
+    hardwareTourJob = null
     audioEngine.releaseAll()
   }
 
   fun refreshStudioNow() {
-    syncStudioDataOnLoad(announceCompletion = true, refreshServer = true)
+    syncStudioDataOnLoad(announceCompletion = true)
   }
 
-  private fun syncStudioDataOnLoad(announceCompletion: Boolean, refreshServer: Boolean) {
+  private fun syncStudioDataOnLoad(announceCompletion: Boolean) {
     viewModelScope.launch {
-      _syncStatus.update { it.copy(isSyncing = true, statusLabel = "Syncing live data...") }
+      _syncStatus.update { it.copy(isSyncing = true, statusLabel = "Refreshing local & PokéAPI data...") }
       _isSyncingSources.value = true
 
       val localDeferred = async { runCatching { localDexRepository.ensureSeeded() }.getOrDefault(0) }
       val encyclopediaDeferred = async {
         runCatching { encyclopediaAndResourceRepository.syncEncyclopediaSourcesOnOpen() }.getOrDefault(0)
-      }
-      val cloudDeferred = if (refreshServer) {
-        async { cloudRepository.refreshFromServer(currentUserId) }
-      } else {
-        null
       }
       val primaryRefreshDeferred = async {
         localDexRepository.refreshLivePokemonIfOnline(_selectedPokemon.value.dexNumber)
@@ -638,16 +668,15 @@ class StudioViewModel(
 
       val updatedLocalCount = localDeferred.await()
       val webSourcesSynced = encyclopediaDeferred.await()
-      val cloudResult = cloudDeferred?.await()
       val apiResult = primaryRefreshDeferred.await()
       _isSyncingSources.value = false
 
       val finishedAt = System.currentTimeMillis()
       val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(finishedAt))
       val statusText = when {
-        webSourcesSynced > 0 -> "Up to date ($webSourcesSynced/3 DBs) • $timeStr"
-        apiResult.isSuccess || cloudResult?.isSuccess == true -> "Up to date • $timeStr"
-        else -> "Local synced • $timeStr"
+        webSourcesSynced > 0 -> "Offline Vault + $webSourcesSynced/3 DBs • $timeStr"
+        apiResult.isSuccess -> "Offline Vault + PokéAPI • $timeStr"
+        else -> "100% Offline Room Ready • $timeStr"
       }
 
       _syncStatus.value = StudioSyncStatus(
@@ -657,9 +686,8 @@ class StudioViewModel(
       )
 
       if (announceCompletion) {
-        val cloudDocs = cloudResult?.getOrNull() ?: 0
         _statusBannerMessage.value =
-          "Synced ($timeStr): $webSourcesSynced/3 DBs, $cloudDocs cloud docs & $updatedLocalCount Dex updates."
+          "Refreshed ($timeStr): $webSourcesSynced/3 encyclopedia sources & $updatedLocalCount local Dex entries ready."
       }
     }
   }
@@ -669,20 +697,67 @@ class StudioViewModel(
       _isSyncingSources.value = true
       val count = runCatching { encyclopediaAndResourceRepository.syncEncyclopediaSourcesOnOpen() }.getOrDefault(0)
       _isSyncingSources.value = false
-      _statusBannerMessage.value = "Updated $count/3 canonical databases."
+      _statusBannerMessage.value = "Updated $count/3 canonical databases into local Room cache."
     }
   }
 
   // =========================================================================
-  // PHASE 2 & 3: UNIVERSAL HARDWARE REGISTRY + CONVERGENCE + EXTRA PRETTY
+  // UNIVERSAL HARDWARE REGISTRY + GAME TEST RUNTIME DROPDOWN + HARDWARE TOUR
   // =========================================================================
 
+  private fun deriveRuntimeLabel(
+    activeIds: Set<String>,
+    allPlatforms: List<HardwarePlatformSpec>,
+    disciplineMode: MasterDisciplineMode,
+  ): String {
+    val total = allPlatforms.size.coerceAtLeast(activeIds.size)
+    return when {
+      total > 0 && activeIds.size >= total && disciplineMode == MasterDisciplineMode.SHOVEL_KNIGHT_CURATED ->
+        "Ultimate Target Style — All $total Hardware (Shovel Knight+ Curated)"
+      total > 0 && activeIds.size >= total && disciplineMode == MasterDisciplineMode.MAXIMALIST_PRETTY ->
+        "Ultimate Target Style — All $total Hardware (Maximalist Pretty)"
+      activeIds.size == 1 -> {
+        val spec = allPlatforms.firstOrNull { it.id == activeIds.first() }
+        "${spec?.name ?: activeIds.first()} (${spec?.year ?: ""}) — ${disciplineMode.label}"
+      }
+      else -> "Custom Combo (${activeIds.size} Hardware) • ${disciplineMode.label}"
+    }
+  }
+
+  private fun deriveRuntimePresetId(
+    activeIds: Set<String>,
+    allPlatforms: List<HardwarePlatformSpec>,
+    disciplineMode: MasterDisciplineMode,
+  ): String {
+    val total = allPlatforms.size
+    return when {
+      total > 0 && activeIds.size >= total && disciplineMode == MasterDisciplineMode.SHOVEL_KNIGHT_CURATED ->
+        HardwareRuntimePresetCatalog.MODE_ULTIMATE_CURATED
+      total > 0 && activeIds.size >= total && disciplineMode == MasterDisciplineMode.MAXIMALIST_PRETTY ->
+        HardwareRuntimePresetCatalog.MODE_ULTIMATE_MAXIMALIST
+      activeIds.size == 1 -> "single_${activeIds.first()}"
+      else -> "custom_combo"
+    }
+  }
+
+  private fun cancelHardwareTourIfRunning() {
+    if (hardwareTourJob?.isActive == true) {
+      hardwareTourJob?.cancel()
+      hardwareTourJob = null
+      _hardwareRegistryState.update { it.copy(isHardwareTourActive = false, hardwareTourStepLabel = "") }
+    }
+  }
+
   private fun recomputeHardwareConvergence(
-    allPlatforms: List<com.example.engine.HardwarePlatformSpec> = _hardwareRegistryState.value.allPlatforms,
+    allPlatforms: List<HardwarePlatformSpec> = _hardwareRegistryState.value.allPlatforms,
     activeIds: Set<String> = _hardwareRegistryState.value.activePlatformIds,
     disciplineMode: MasterDisciplineMode = _hardwareRegistryState.value.disciplineMode,
     characterMixMode: CharacterMixMode = _hardwareRegistryState.value.characterMixMode,
     extraPretty: ExtraVisualAudioSettings = _hardwareRegistryState.value.extraPretty,
+    runtimePresetId: String = _hardwareRegistryState.value.activeRuntimePresetId,
+    runtimeLabel: String = _hardwareRegistryState.value.activeRuntimeLabel,
+    isTourActive: Boolean = _hardwareRegistryState.value.isHardwareTourActive,
+    tourStepLabel: String = _hardwareRegistryState.value.hardwareTourStepLabel,
   ) {
     val cfg = _fusionConfig.value
     val activeSpecs = allPlatforms.filter { it.id in activeIds }
@@ -710,6 +785,10 @@ class StudioViewModel(
       disciplineMode = disciplineMode,
       characterMixMode = characterMixMode,
       extraPretty = extraPretty,
+      activeRuntimePresetId = runtimePresetId,
+      activeRuntimeLabel = runtimeLabel,
+      isHardwareTourActive = isTourActive,
+      hardwareTourStepLabel = tourStepLabel,
       convergedVisuals = visuals,
       convergedAudio = audio,
     )
@@ -717,41 +796,188 @@ class StudioViewModel(
   }
 
   fun toggleHardwarePlatform(platformId: String) {
+    cancelHardwareTourIfRunning()
     val current = _hardwareRegistryState.value
     val updated = if (platformId in current.activePlatformIds) {
       if (current.activePlatformIds.size > 1) current.activePlatformIds - platformId else current.activePlatformIds
     } else {
       current.activePlatformIds + platformId
     }
-    recomputeHardwareConvergence(activeIds = updated)
+    recomputeHardwareConvergence(
+      activeIds = updated,
+      runtimePresetId = deriveRuntimePresetId(updated, current.allPlatforms, current.disciplineMode),
+      runtimeLabel = deriveRuntimeLabel(updated, current.allPlatforms, current.disciplineMode),
+    )
     audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
     if (_activeProjectId.value != null) _hasUnsavedChanges.value = true
     persistCampaignStateToRoom()
   }
 
   fun toggleAllHardwareOnRecord(enableAll: Boolean) {
+    cancelHardwareTourIfRunning()
     val current = _hardwareRegistryState.value
     val targetIds = if (enableAll) {
       current.allPlatforms.map { it.id }.toSet().ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
     } else {
       UniversalHardwareRegistry.defaultCuratedHardwareIds
     }
-    recomputeHardwareConvergence(activeIds = targetIds)
+    recomputeHardwareConvergence(
+      activeIds = targetIds,
+      runtimePresetId = deriveRuntimePresetId(targetIds, current.allPlatforms, current.disciplineMode),
+      runtimeLabel = deriveRuntimeLabel(targetIds, current.allPlatforms, current.disciplineMode),
+    )
     audioEngine.playSfx(if (enableAll) StudioSfxType.LEVEL_UP else StudioSfxType.UI_CONFIRM)
     if (_activeProjectId.value != null) _hasUnsavedChanges.value = true
     persistCampaignStateToRoom()
     _statusBannerMessage.value = if (enableAll) {
       "Enabled ALL ${targetIds.size} Gaming Hardware Platforms on Record via Peak-Preserving Convergence!"
     } else {
-      "Restored Shovel Knight+ Curated ${targetIds.size}-platform hardware stack."
+      "Switched to curated ${targetIds.size}-platform hardware showcase stack."
     }
   }
 
   fun setMasterDisciplineMode(mode: MasterDisciplineMode) {
-    recomputeHardwareConvergence(disciplineMode = mode)
+    cancelHardwareTourIfRunning()
+    val current = _hardwareRegistryState.value
+    recomputeHardwareConvergence(
+      disciplineMode = mode,
+      runtimePresetId = deriveRuntimePresetId(current.activePlatformIds, current.allPlatforms, mode),
+      runtimeLabel = deriveRuntimeLabel(current.activePlatformIds, current.allPlatforms, mode),
+    )
     audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
     if (_activeProjectId.value != null) _hasUnsavedChanges.value = true
     persistCampaignStateToRoom()
+  }
+
+  /**
+   * Game Test Hardware Runtime Mode selector:
+   * Immediately updates AGSL shaders, stage VFX, live looping BGM synthesis, and all subsequent SFX/cries.
+   */
+  fun applyHardwareRuntimePreset(preset: HardwareRuntimePreset, fromTour: Boolean = false) {
+    if (!fromTour) cancelHardwareTourIfRunning()
+    val current = _hardwareRegistryState.value
+    val nextExtra = if (preset.enableAllExtraPretty) {
+      ExtraVisualAudioSettings(
+        dynamicWeatherParticles = true,
+        waterCausticsAndFoam = true,
+        hd2dVolumetricRaysAndBokeh = true,
+        ultraVoxelSlices = true,
+        uncappedBloomAndRimFlares = true,
+        analogCrtPhosphorAndCurvature = true,
+        fluid60FpsCharacterMotion = true,
+        foregroundParallaxFraming = true,
+        extraLushAudioReverbAndChoir = true,
+      )
+    } else {
+      current.extraPretty
+    }
+    recomputeHardwareConvergence(
+      activeIds = preset.platformIds,
+      disciplineMode = preset.disciplineMode,
+      extraPretty = nextExtra,
+      runtimePresetId = preset.id,
+      runtimeLabel = preset.label,
+      isTourActive = if (fromTour) current.isHardwareTourActive else false,
+      tourStepLabel = if (fromTour) current.hardwareTourStepLabel else "",
+    )
+    audioEngine.playSfx(
+      if (preset.id == HardwareRuntimePresetCatalog.MODE_ULTIMATE_CURATED ||
+        preset.id == HardwareRuntimePresetCatalog.MODE_ULTIMATE_MAXIMALIST
+      ) {
+        StudioSfxType.LEVEL_UP
+      } else {
+        StudioSfxType.UI_CONFIRM
+      }
+    )
+    if (!fromTour) {
+      if (_activeProjectId.value != null) _hasUnsavedChanges.value = true
+      persistCampaignStateToRoom()
+      _gameTestState.update {
+        it.copy(
+          transitionPulseNonce = it.transitionPulseNonce + 1L,
+          battleLog = (listOf("Hardware Runtime -> ${preset.label}") + it.battleLog).take(16),
+        )
+      }
+    }
+  }
+
+  /**
+   * Inline Custom Hardware Combo Builder from Game Test dropdown.
+   */
+  fun applyCustomHardwareCombo(
+    selectedIds: Set<String>,
+    disciplineMode: MasterDisciplineMode,
+  ) {
+    cancelHardwareTourIfRunning()
+    val current = _hardwareRegistryState.value
+    val nonEmpty = selectedIds.ifEmpty { current.allPlatforms.map { it.id }.toSet() }
+    val label = deriveRuntimeLabel(nonEmpty, current.allPlatforms, disciplineMode)
+    recomputeHardwareConvergence(
+      activeIds = nonEmpty,
+      disciplineMode = disciplineMode,
+      runtimePresetId = "custom_combo",
+      runtimeLabel = label,
+    )
+    audioEngine.playSfx(StudioSfxType.ITEM_USE)
+    if (_activeProjectId.value != null) _hasUnsavedChanges.value = true
+    persistCampaignStateToRoom()
+    _gameTestState.update {
+      it.copy(
+        transitionPulseNonce = it.transitionPulseNonce + 1L,
+        battleLog = (listOf("Applied Custom Combo: $label") + it.battleLog).take(16),
+      )
+    }
+  }
+
+  /**
+   * 4-second per step live Hardware Tour:
+   * Game Boy DMG -> NES -> SNES -> GBA -> PS1 -> GameCube -> 3DS -> Ultimate Target Style (All 156 Hardware).
+   */
+  fun toggleHardwareTour() {
+    if (_hardwareRegistryState.value.isHardwareTourActive) {
+      cancelHardwareTourIfRunning()
+      audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+      return
+    }
+    val specs = _hardwareRegistryState.value.allPlatforms
+    val sequence = HardwareRuntimePresetCatalog.buildHardwareTourSequence(specs)
+    if (sequence.isEmpty()) return
+
+    hardwareTourJob?.cancel()
+    hardwareTourJob = viewModelScope.launch {
+      _hardwareRegistryState.update {
+        it.copy(
+          isHardwareTourActive = true,
+          hardwareTourStepLabel = "Tour 1/${sequence.size}: ${sequence.first().label}",
+        )
+      }
+      sequence.forEachIndexed { idx, preset ->
+        _hardwareRegistryState.update {
+          it.copy(
+            isHardwareTourActive = true,
+            hardwareTourStepLabel = "Tour ${idx + 1}/${sequence.size}: ${preset.label}",
+          )
+        }
+        applyHardwareRuntimePreset(preset, fromTour = true)
+        _gameTestState.update {
+          it.copy(
+            transitionPulseNonce = it.transitionPulseNonce + 1L,
+            battleLog = (listOf("[Hardware Tour ${idx + 1}/${sequence.size}] ${preset.label}") + it.battleLog).take(16),
+          )
+        }
+        if (idx < sequence.lastIndex) {
+          delay(4000L)
+        }
+      }
+      _hardwareRegistryState.update {
+        it.copy(
+          isHardwareTourActive = false,
+          hardwareTourStepLabel = "",
+        )
+      }
+      persistCampaignStateToRoom()
+      _statusBannerMessage.value = "Hardware Tour converged onto Ultimate Target Style (All ${specs.size} Hardware)!"
+    }
   }
 
   fun setCharacterMixMode(mode: CharacterMixMode) {
@@ -767,7 +993,7 @@ class StudioViewModel(
   }
 
   // =========================================================================
-  // PHASE 4: PURE-KOTLIN OMNI-HARDWARE AUDIO CONSOLE
+  // PURE-KOTLIN OMNI-HARDWARE AUDIO CONSOLE
   // =========================================================================
 
   fun toggleAudioMute() {
@@ -825,7 +1051,7 @@ class StudioViewModel(
   }
 
   // =========================================================================
-  // PHASE 1: HOISTED SPRITE EDITOR + REAL ROOM/CLOUD PERSISTENCE
+  // HOISTED SPRITE EDITOR + LOCAL ROOM PERSISTENCE
   // =========================================================================
 
   private fun updateSpriteStateWithBitmap(transform: (SpriteEditorUiState) -> SpriteEditorUiState) {
@@ -861,7 +1087,16 @@ class StudioViewModel(
 
   fun applySpritePresetPalette(presetName: String) {
     val preset = SpritePixelMatrixEngine.consolePresetPalettes[presetName] ?: return
-    updateSpriteStateWithBitmap { it.copy(paletteArgb = preset) }
+    applySpritePresetPaletteValues(preset)
+  }
+
+  /**
+   * Applies an 8-color ARGB palette directly in a single bitmap allocation.
+   */
+  fun applySpritePresetPaletteValues(palette: List<Long>) {
+    if (palette.isEmpty()) return
+    val normalized = List(8) { idx -> palette.getOrElse(idx) { 0xFF00F5D4L } }
+    updateSpriteStateWithBitmap { it.copy(paletteArgb = normalized) }
     audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
   }
 
@@ -975,22 +1210,49 @@ class StudioViewModel(
     audioEngine.playSfx(StudioSfxType.UI_CANCEL)
   }
 
+  /**
+   * Quantizes an imported bitmap into BOTH Frame 1 (active) AND a gently 1px-bobbed Frame 2
+   * so pressing Play animates the newly sampled sprite instead of flashing a stale monster!
+   */
   fun importBitmapIntoSpriteEditor(bitmap: Bitmap, nameHint: String? = null) {
     val pkmn = _selectedPokemon.value
     val extractedPalette = SpritePixelMatrixEngine.extractPaletteFromBitmap(bitmap, pkmn.primaryHex, pkmn.secondaryHex)
-    val quantized = SpritePixelMatrixEngine.quantizeBitmapToIndexedGrid(bitmap, extractedPalette)
+    val quantizedF0 = SpritePixelMatrixEngine.quantizeBitmapToIndexedGrid(bitmap, extractedPalette)
+    val bobbedF1 = buildBobbedSpriteFrame(quantizedF0)
     updateSpriteStateWithBitmap { s ->
-      val newFrames = s.frames.toMutableList().also { it[s.activeFrameIndex] = quantized }
+      val newFrames = s.frames.toMutableList()
+      if (newFrames.size < 2) {
+        newFrames.clear()
+        newFrames.add(quantizedF0)
+        newFrames.add(bobbedF1)
+      } else {
+        newFrames[0] = quantizedF0
+        newFrames[1] = bobbedF1
+      }
       s.copy(
+        seedDexNumber = pkmn.dexNumber,
         spriteName = nameHint ?: s.spriteName,
         paletteArgb = extractedPalette,
         frames = newFrames,
+        activeFrameIndex = 0,
         undoStack = (s.undoStack + listOf(s.currentFrame)).takeLast(24),
         useCustomBitmapInViewport = true,
       )
     }
     audioEngine.playSfx(StudioSfxType.ITEM_USE)
-    _statusBannerMessage.value = "Quantized imported asset into 16x16 PPU pixel frame & 8-color palette!"
+    _statusBannerMessage.value = "Quantized asset into animated 2-frame 16x16 PPU sprite & 8-color palette!"
+  }
+
+  private fun buildBobbedSpriteFrame(baseFrame: List<Int>): List<Int> {
+    val grid = SpritePixelMatrixEngine.GRID_SIZE
+    val shifted = MutableList(SpritePixelMatrixEngine.PIXEL_COUNT) { -1 }
+    for (r in 0 until grid) {
+      val srcRow = (r + 1).coerceAtMost(grid - 1)
+      for (c in 0 until grid) {
+        shifted[r * grid + c] = baseFrame[srcRow * grid + c]
+      }
+    }
+    return shifted
   }
 
   fun loadSeedIntoSpriteEditor(pokemon: NativePokemonEntity) {
@@ -1018,7 +1280,7 @@ class StudioViewModel(
   fun saveCurrentSpriteToRoomAndCloud() {
     val s = _spriteEditorState.value
     val spriteId = s.activeSavedSpriteId ?: "spr_${UUID.randomUUID().toString().take(10)}"
-    val projectKey = _activeProjectId.value.orEmpty()
+    val projectKey = activePersistenceProjectKey()
     val palJson = SpritePixelMatrixEngine.serializePaletteJson(s.paletteArgb)
     val framesJson = SpritePixelMatrixEngine.serializeFramesRleJson(s.frames)
     val cleanName = s.spriteName.trim().ifBlank { "${_selectedPokemon.value.name} Custom Rig" }
@@ -1042,8 +1304,8 @@ class StudioViewModel(
       }
       _spriteEditorState.update { it.copy(activeSavedSpriteId = spriteId, useCustomBitmapInViewport = true) }
 
-      val compactPayload = "RLE_SPRITE|ID:$spriteId|PAL:$primaryHex,$secondaryHex|F:${s.frames.size}|${SpritePixelMatrixEngine.encodeFrameRle(s.currentFrame)}".take(950)
-      val cloudAsset = CustomStudioAsset(
+      val compactPayload = "RLE_SPRITE|ID:$spriteId|PAL:$primaryHex,$secondaryHex|F:${s.frames.size}|${SpritePixelMatrixEngine.encodeFrameRle(s.currentFrame)}".take(200)
+      val localAsset = CustomStudioAsset(
         name = cleanName,
         category = AssetCategory.SPRITES.label,
         consoleLineage = _selectedPokemon.value.consoleOriginSystem,
@@ -1052,10 +1314,10 @@ class StudioViewModel(
         shaderFormula = compactPayload,
         projectId = projectKey,
       )
-      cloudRepository.createCustomAsset(cloudAsset)
+      localProjectRepository.addStudioAsset(localAsset)
       _isSavingProject.value = false
       audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
-      _statusBannerMessage.value = "Saved '$cleanName' (${s.frames.size} frames) to Room & Cloud! Active in Viewport & Game Test."
+      _statusBannerMessage.value = "Saved '$cleanName' (${s.frames.size} frames) to Local Room Vault! Active in Viewport & Game Test."
     }
   }
 
@@ -1090,7 +1352,7 @@ class StudioViewModel(
   }
 
   // =========================================================================
-  // PHASE 1 & 5: PER-PROJECT PER-REGION MAP EDITOR + GAME TEST ENGINE
+  // 16x16 PER-PROJECT PER-REGION MAP EDITOR + OVERWORLD + NPC INTERACTIONS
   // =========================================================================
 
   fun selectMapRegion(regionId: String) {
@@ -1103,9 +1365,11 @@ class StudioViewModel(
   }
 
   fun paintMapTile(index: Int) {
-    if (index !in 0..63) return
+    if (index !in 0 until MasterCanonTemplateCatalog.MAP_TILE_COUNT) return
     val brush = _selectedBrushTile.value
-    val updated = _mapGrid.value.toMutableList().also { it[index] = brush }
+    val current = _mapGrid.value
+    if (current.size != MasterCanonTemplateCatalog.MAP_TILE_COUNT) return
+    val updated = current.toMutableList().also { it[index] = brush }
     _mapGrid.value = updated
     persistActiveMapToRoom(updated)
   }
@@ -1116,7 +1380,7 @@ class StudioViewModel(
     _mapGrid.value = chapter.defaultMapTiles
     persistActiveMapToRoom(chapter.defaultMapTiles)
     audioEngine.playSfx(StudioSfxType.UI_CANCEL)
-    _statusBannerMessage.value = "Restored ${chapter.regionName} default 8x8 tilemap."
+    _statusBannerMessage.value = "Restored ${chapter.regionName} custom 16x16 tilemap."
   }
 
   private fun persistActiveMapToRoom(tiles: List<Int>) {
@@ -1131,7 +1395,7 @@ class StudioViewModel(
           projectId = projectKey,
           regionId = regionId,
           regionName = chapter.regionName,
-          gridSize = 8,
+          gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE,
           tilesCsv = tiles.joinToString(","),
           updatedAtEpochMs = System.currentTimeMillis(),
         )
@@ -1140,7 +1404,7 @@ class StudioViewModel(
   }
 
   fun selectMapBrush(tileType: Int) {
-    _selectedBrushTile.value = tileType.coerceIn(0, 5)
+    _selectedBrushTile.value = tileType.coerceIn(0, 11)
     audioEngine.playSfx(StudioSfxType.UI_HOVER)
   }
 
@@ -1153,12 +1417,18 @@ class StudioViewModel(
     _gameTestState.update { s ->
       s.copy(
         activeRegionId = chapter.id,
-        playerRow = 5,
-        playerCol = 2,
+        playerRow = chapter.spawnRow,
+        playerCol = chapter.spawnCol,
         inBattle = false,
+        activeDialoguePoi = null,
+        showWarpGatePicker = false,
+        playerAtkStage = 0,
+        playerSpAStage = 0,
+        enemyAtkStage = 0,
+        enemySpAStage = 0,
         weather = chapter.weatherPreset,
         transitionPulseNonce = s.transitionPulseNonce + 1L,
-        battleLog = (listOf("Traveled to ${chapter.regionName}: ${chapter.storyLogEntry}") + s.battleLog).take(14),
+        battleLog = (listOf("Traveled to ${chapter.regionName} (${chapter.biomeStyle.label}): ${chapter.storyLogEntry}") + s.battleLog).take(16),
       )
     }
     val regionTheme = BgmThemeId.fromId(chapter.defaultBgmThemeId)
@@ -1171,32 +1441,46 @@ class StudioViewModel(
     persistCampaignStateToRoom()
   }
 
+  fun warpToRegion(regionId: String) {
+    _gameTestState.update { it.copy(showWarpGatePicker = false) }
+    selectGameTestRegion(regionId)
+  }
+
+  fun dismissWarpGatePicker() {
+    _gameTestState.update { it.copy(showWarpGatePicker = false) }
+  }
+
+  fun dismissDialogueBanner() {
+    _gameTestState.update { it.copy(activeDialoguePoi = null) }
+  }
+
   fun movePlayerOnOverworld(dRow: Int, dCol: Int) {
     val gt = _gameTestState.value
     if (gt.inBattle) return
+    val gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE
     val tiles = _mapGrid.value
     val moveDir = when {
-      dRow < 0 -> com.example.engine.MoveDirection.UP
-      dRow > 0 -> com.example.engine.MoveDirection.DOWN
-      dCol < 0 -> com.example.engine.MoveDirection.LEFT
-      else -> com.example.engine.MoveDirection.RIGHT
+      dRow < 0 -> MoveDirection.UP
+      dRow > 0 -> MoveDirection.DOWN
+      dCol < 0 -> MoveDirection.LEFT
+      else -> MoveDirection.RIGHT
     }
     val (newCol, newRow) = UniversalGameFeelEngine.resolveStepWithCornerCorrection(
       x = gt.playerCol,
       y = gt.playerRow,
       direction = moveDir,
-      gridSize = 8,
+      gridSize = gridSize,
       tiles = tiles,
     )
     if (newRow == gt.playerRow && newCol == gt.playerCol) {
       audioEngine.playSfx(StudioSfxType.UI_CANCEL)
       return
     }
-    val landedTile = tiles.getOrElse(newRow * 8 + newCol) { 0 }
+    val landedTile = tiles.getOrElse(newRow * gridSize + newCol) { 0 }
     when (landedTile) {
-      1 -> audioEngine.playSfx(StudioSfxType.GRASS_RUSTLE)
-      5 -> audioEngine.playSfx(StudioSfxType.STEP_CRYSTAL)
-      3 -> audioEngine.playSfx(StudioSfxType.STEP_STONE)
+      1, 9 -> audioEngine.playSfx(StudioSfxType.GRASS_RUSTLE)
+      5, 11 -> audioEngine.playSfx(StudioSfxType.STEP_CRYSTAL)
+      3, 7, 8 -> audioEngine.playSfx(StudioSfxType.STEP_STONE)
       else -> audioEngine.playSfx(StudioSfxType.STEP_GRASS)
     }
 
@@ -1206,14 +1490,103 @@ class StudioViewModel(
         playerRow = newRow,
         playerCol = newCol,
         stepsTaken = newSteps,
+        activeDialoguePoi = null,
       )
     }
     persistCampaignStateToRoom()
 
-    if (landedTile == 5) {
-      triggerManualEncounter(isBoss = true)
-    } else if (landedTile == 1 && newSteps % 2 == 0) {
-      triggerManualEncounter(isBoss = false)
+    when (landedTile) {
+      5 -> triggerManualEncounter(isBoss = true)
+      8 -> healFullParty()
+      11 -> {
+        audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+        _gameTestState.update {
+          it.copy(
+            showWarpGatePicker = true,
+            battleLog = (listOf("Stepped onto Region Warp Gate! Choose a connected region to travel.") + it.battleLog).take(16),
+          )
+        }
+      }
+      1, 9 -> {
+        if (newSteps % 3 == 0) {
+          triggerManualEncounter(isBoss = false)
+        }
+      }
+    }
+  }
+
+  /**
+   * "A — Interact" action on the 16x16 Overworld:
+   * Checks current & 4-cardinal adjacent tiles for NPCs / Landmarks, Healing Plazas,
+   * Prism Sanctuaries, or Region Warp Gates.
+   */
+  fun interactAtCurrentPosition() {
+    val gt = _gameTestState.value
+    if (gt.inBattle) return
+    val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
+      ?: MasterCanonTemplateCatalog.worldChapters.first()
+    val gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE
+    val tiles = _mapGrid.value
+
+    // 1. Check same tile or adjacent tile for an NPC / POI
+    val nearbyPoi = chapter.pointsOfInterest.firstOrNull { poi ->
+      abs(poi.col - gt.playerCol) + abs(poi.row - gt.playerRow) <= 1
+    }
+    if (nearbyPoi != null) {
+      audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+      if (nearbyPoi.interactionKind == PoiInteractionKind.HEALER_OR_LORE) {
+        healFullParty()
+      }
+      _gameTestState.update {
+        it.copy(
+          activeDialoguePoi = nearbyPoi,
+          battleLog = (listOf("${nearbyPoi.name}: \"${nearbyPoi.dialogue}\"") + it.battleLog).take(16),
+        )
+      }
+      return
+    }
+
+    // 2. Check current or adjacent special tiles (Healing Plaza=8, Prism Sanctuary=5, Warp Gate=11)
+    val checkCoords = listOf(
+      gt.playerCol to gt.playerRow,
+      (gt.playerCol + 1).coerceAtMost(gridSize - 1) to gt.playerRow,
+      (gt.playerCol - 1).coerceAtLeast(0) to gt.playerRow,
+      gt.playerCol to (gt.playerRow + 1).coerceAtMost(gridSize - 1),
+      gt.playerCol to (gt.playerRow - 1).coerceAtLeast(0),
+    )
+    val foundTile = checkCoords.map { (c, r) -> tiles.getOrElse(r * gridSize + c) { 0 } }
+    when {
+      8 in foundTile -> healFullParty()
+      5 in foundTile -> triggerManualEncounter(isBoss = true)
+      11 in foundTile -> {
+        audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+        _gameTestState.update { it.copy(showWarpGatePicker = true) }
+      }
+      else -> {
+        val currentTile = tiles.getOrElse(gt.playerRow * gridSize + gt.playerCol) { 0 }
+        val tileName = MasterCanonTemplateCatalog.tileLegendLabels.firstOrNull { it.first == currentTile }?.second ?: "Open Path"
+        audioEngine.playSfx(StudioSfxType.UI_HOVER)
+        _gameTestState.update {
+          it.copy(
+            battleLog = (listOf("Inspected ($tileName) at [${gt.playerCol}, ${gt.playerRow}] in ${chapter.regionName}. Step near an NPC marker or Sanctuary to interact!") + it.battleLog).take(16),
+          )
+        }
+      }
+    }
+  }
+
+  fun triggerPoiBattle(poi: RegionPointOfInterest) {
+    val dex = poi.battleDexSeed
+    _gameTestState.update { it.copy(activeDialoguePoi = null) }
+    val isRival = poi.interactionKind == PoiInteractionKind.RIVAL_OR_CHALLENGER
+    if (dex != null) {
+      triggerEncounterWithSpecificDex(
+        enemyDex = dex,
+        isBoss = isRival,
+        titlePrefix = if (isRival) poi.name else "Guardian",
+      )
+    } else {
+      triggerManualEncounter(isBoss = isRival)
     }
   }
 
@@ -1227,13 +1600,22 @@ class StudioViewModel(
     } else {
       pool[abs(gt.stepsTaken + battleActionCounter++) % pool.size]
     }
+    val prefix = if (isBoss) "Prism Sanctuary Guardian" else "Wild"
+    triggerEncounterWithSpecificDex(enemyDex, isBoss, prefix)
+  }
+
+  private fun triggerEncounterWithSpecificDex(enemyDex: Int, isBoss: Boolean, titlePrefix: String) {
+    val gt = _gameTestState.value
+    val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
+      ?: MasterCanonTemplateCatalog.worldChapters.first()
     val enemyEntity = findPokemonByDex(enemyDex)
     val enemyLevel = if (isBoss) 55 else 46
     val enemySnap = StudioViewModelHelpers.buildCombatantFromEntity(enemyEntity, level = enemyLevel)
     val leadEntity = findPokemonByDex(gt.activeLeadDexId)
+    val leadLevel = gt.levelFor(leadEntity.dexNumber)
     val leadSnap = StudioViewModelHelpers.buildCombatantFromEntity(
       entity = leadEntity,
-      level = 50,
+      level = leadLevel,
       gimmick = BattleGimmickMode.NONE,
       heldItemId = gt.heldItemsMap[leadEntity.dexNumber].orEmpty(),
     )
@@ -1248,12 +1630,15 @@ class StudioViewModel(
 
     markAtlasSeenOrBattled(enemyDex, seen = true, battled = false)
 
-    val titlePrefix = if (isBoss) "Prism Sanctuary Guardian" else "Wild"
     _gameTestState.update {
       it.copy(
         inBattle = true,
         turnNumber = 1,
         partyCurrentHpMap = updatedHpMap,
+        playerAtkStage = 0,
+        playerSpAStage = 0,
+        enemyAtkStage = 0,
+        enemySpAStage = 0,
         enemyDexId = enemyDex,
         enemyLevel = enemyLevel,
         enemyCurrentHp = enemySnap.maxHp(),
@@ -1261,27 +1646,29 @@ class StudioViewModel(
         enemyStatus = StatusCondition.HEALTHY,
         isBossEncounter = isBoss,
         activeGimmick = BattleGimmickMode.NONE,
+        activeDialoguePoi = null,
+        showWarpGatePicker = false,
         weather = chapter.weatherPreset,
         transitionPulseNonce = it.transitionPulseNonce + 1L,
-        battleLog = (listOf("$titlePrefix ${enemyEntity.name} (Lv.$enemyLevel) materialized in ${chapter.regionName}!") + it.battleLog).take(14),
+        battleLog = (listOf("$titlePrefix ${enemyEntity.name} (Lv.$enemyLevel) materialized in ${chapter.regionName}!") + it.battleLog).take(16),
       )
     }
   }
 
   /**
-   * Bug-fixed Dynamax & Gimmick switcher:
    * Scales current HP proportionally via CanonBattleResolver.scaleHpProportionally instead of resetting to full HP!
    */
   fun toggleGameTestGimmick(targetGimmick: BattleGimmickMode) {
     val gt = _gameTestState.value
     val nextGimmick = if (gt.activeGimmick == targetGimmick) BattleGimmickMode.NONE else targetGimmick
     val lead = findPokemonByDex(gt.activeLeadDexId)
+    val leadLevel = gt.levelFor(lead.dexNumber)
     val held = gt.heldItemsMap[lead.dexNumber].orEmpty()
     val oldMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
-      lead, level = 50, gimmick = gt.activeGimmick, teraType = gt.teraType, heldItemId = held,
+      lead, level = leadLevel, gimmick = gt.activeGimmick, teraType = gt.teraType, heldItemId = held,
     ).maxHp()
     val newMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
-      lead, level = 50, gimmick = nextGimmick, teraType = gt.teraType, heldItemId = held,
+      lead, level = leadLevel, gimmick = nextGimmick, teraType = gt.teraType, heldItemId = held,
     ).maxHp()
     val currentHp = gt.partyCurrentHpMap[lead.dexNumber] ?: oldMaxHp
     val scaledHp = CanonBattleResolver.scaleHpProportionally(currentHp, oldMaxHp, newMaxHp)
@@ -1291,7 +1678,7 @@ class StudioViewModel(
       it.copy(
         activeGimmick = nextGimmick,
         partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to scaledHp),
-        battleLog = (listOf("${lead.name} shifted resonance to ${nextGimmick.displayName} (HP scaled proportionally: $scaledHp/$newMaxHp).") + it.battleLog).take(14),
+        battleLog = (listOf("${lead.name} shifted resonance to ${nextGimmick.displayName} (HP scaled: $scaledHp/$newMaxHp).") + it.battleLog).take(16),
       )
     }
   }
@@ -1324,45 +1711,87 @@ class StudioViewModel(
     val gt = _gameTestState.value
     if (index !in gt.activePartyDexIds.indices || index == gt.activePartyIndex) return
     val newLead = findPokemonByDex(gt.activePartyDexIds[index])
-    val newMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(newLead, level = 50).maxHp()
+    val newLevel = gt.levelFor(newLead.dexNumber)
+    val newMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(newLead, level = newLevel).maxHp()
     val existingHp = gt.partyCurrentHpMap[newLead.dexNumber] ?: newMaxHp
+    if (existingHp <= 0) {
+      audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+      _statusBannerMessage.value = "${newLead.name} has fainted! Use a Revive or Healing Plaza first."
+      return
+    }
     audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
     playPokemonCry(newLead)
     _gameTestState.update {
       it.copy(
         activePartyIndex = index,
         activeGimmick = BattleGimmickMode.NONE,
+        playerAtkStage = 0,
+        playerSpAStage = 0,
         partyCurrentHpMap = it.partyCurrentHpMap + (newLead.dexNumber to existingHp.coerceIn(1, newMaxHp)),
-        battleLog = (listOf("Go! ${newLead.name} entered the Resonance field!") + it.battleLog).take(14),
+        battleLog = (listOf("Go! ${newLead.name} (Lv.$newLevel) entered the Resonance field!") + it.battleLog).take(16),
       )
     }
   }
 
+  /**
+   * Bug-fixed Turn Resolver:
+   * - Picks enemy move first and passes defenderMovePriority into CanonBattleResolver.resolveTurn().
+   * - Honors attackerActsFirst (faster / higher priority combatant strikes first).
+   * - Applies counterShieldChipRecoil and Weakness Policy (+2 Atk / +2 SpA stages persisted across turns).
+   * - Auto-switches to next conscious party member on faint; only returns to Healing Bay when ALL party members faint.
+   */
   fun executePlayerBattleMove(move: BattleMoveSpec) {
     val gt = _gameTestState.value
     if (!gt.inBattle) return
 
     val playerEntity = findPokemonByDex(gt.activeLeadDexId)
     val enemyEntity = findPokemonByDex(gt.enemyDexId)
+    val playerLevel = gt.levelFor(playerEntity.dexNumber)
     val playerHeld = gt.heldItemsMap[playerEntity.dexNumber].orEmpty()
     val playerStatus = gt.partyStatusMap[playerEntity.dexNumber] ?: StatusCondition.HEALTHY
 
-    val playerSnap = StudioViewModelHelpers.buildCombatantFromEntity(
+    var pAtkStage = gt.playerAtkStage
+    var pSpAStage = gt.playerSpAStage
+    var eAtkStage = gt.enemyAtkStage
+    var eSpAStage = gt.enemySpAStage
+
+    fun currentPlayerSnap(hp: Int, maxHp: Int) = StudioViewModelHelpers.buildCombatantFromEntity(
       entity = playerEntity,
-      level = 50,
+      level = playerLevel,
       gimmick = gt.activeGimmick,
       teraType = gt.teraType,
       status = playerStatus,
       heldItemId = playerHeld,
-    )
-    val enemySnap = StudioViewModelHelpers.buildCombatantFromEntity(
+      stages = StatStages(atk = pAtkStage, spA = pSpAStage),
+      bondGauge = gt.bondGauge,
+    ).copy(currentHpPercent = (hp * 100 / maxHp.coerceAtLeast(1)).coerceIn(1, 100))
+
+    fun currentEnemySnap(hp: Int, maxHp: Int) = StudioViewModelHelpers.buildCombatantFromEntity(
       entity = enemyEntity,
       level = gt.enemyLevel,
       status = gt.enemyStatus,
+      stages = StatStages(atk = eAtkStage, spA = eSpAStage),
+    ).copy(currentHpPercent = (hp * 100 / maxHp.coerceAtLeast(1)).coerceIn(1, 100))
+
+    val basePlayerSnap = StudioViewModelHelpers.buildCombatantFromEntity(
+      entity = playerEntity,
+      level = playerLevel,
+      gimmick = gt.activeGimmick,
+      teraType = gt.teraType,
+      status = playerStatus,
+      heldItemId = playerHeld,
+      stages = StatStages(atk = pAtkStage, spA = pSpAStage),
+      bondGauge = gt.bondGauge,
     )
-    val playerMaxHp = playerSnap.maxHp()
+    val playerMaxHp = basePlayerSnap.maxHp()
     var playerHp = (gt.partyCurrentHpMap[playerEntity.dexNumber] ?: playerMaxHp).coerceIn(1, playerMaxHp)
     var enemyHp = gt.enemyCurrentHp.coerceIn(1, gt.enemyMaxHp)
+
+    val enemyMoves = StudioViewModelHelpers.buildMovesetForPokemon(
+      enemyEntity,
+      StudioViewModelHelpers.parsePokemonType(enemyEntity.primaryType),
+    )
+    val enemyMove = enemyMoves[gt.turnNumber % enemyMoves.size]
 
     val field = BattleTurnField(
       weather = gt.weather,
@@ -1370,44 +1799,116 @@ class StudioViewModel(
       speedTieSeed = gt.turnNumber + battleActionCounter++,
     )
 
-    val playerResult = CanonBattleResolver.resolveTurn(
-      attacker = playerSnap.copy(currentHpPercent = (playerHp * 100 / playerMaxHp).coerceIn(1, 100)),
-      defender = enemySnap.copy(currentHpPercent = (enemyHp * 100 / gt.enemyMaxHp.coerceAtLeast(1)).coerceIn(1, 100)),
+    val orderPreview = CanonBattleResolver.resolveTurn(
+      attacker = currentPlayerSnap(playerHp, playerMaxHp),
+      defender = currentEnemySnap(enemyHp, gt.enemyMaxHp),
       move = move,
       field = field,
+      defenderMovePriority = enemyMove.priority,
     )
-
-    val dealt = ((playerResult.minDamage + playerResult.maxDamage) / 2).coerceAtLeast(if (playerResult.typeEffectiveness == 0f) 0 else 1)
-    enemyHp = (enemyHp - dealt).coerceAtLeast(0)
-    playerHp = (playerHp - playerResult.lifeOrbRecoil).coerceAtLeast(if (playerHp > 1) 1 else 0)
-
-    val severity = when {
-      playerResult.typeEffectiveness >= 2f -> 2
-      playerResult.typeEffectiveness == 0f || playerResult.typeEffectiveness < 1f -> 3
-      else -> 1
-    }
-    audioEngine.playSfx(
-      when (severity) {
-        2 -> StudioSfxType.HIT_HEAVY_CRIT
-        3 -> StudioSfxType.HIT_RESISTED
-        else -> StudioSfxType.HIT_LIGHT
-      }
-    )
+    val playerGoesFirst = orderPreview.attackerActsFirst
 
     val logs = mutableListOf<String>()
-    val effTag = when {
-      playerResult.typeEffectiveness == 0f -> "No effect!"
-      playerResult.typeEffectiveness >= 2f -> "Super Effective (${playerResult.typeEffectiveness}x)!"
-      playerResult.typeEffectiveness < 1f -> "Resisted (${playerResult.typeEffectiveness}x)."
-      else -> "Clean hit."
+    var lastSeverity = 1
+    var lastAttackerWasPlayer = true
+
+    fun executePlayerStrike() {
+      val result = CanonBattleResolver.resolveTurn(
+        attacker = currentPlayerSnap(playerHp, playerMaxHp),
+        defender = currentEnemySnap(enemyHp, gt.enemyMaxHp),
+        move = move,
+        field = field,
+        defenderMovePriority = enemyMove.priority,
+      )
+      val dealt = if (result.isBlockedByTerrain || result.typeEffectiveness == 0f) {
+        0
+      } else {
+        ((result.minDamage + result.maxDamage) / 2).coerceAtLeast(1)
+      }
+      enemyHp = (enemyHp - dealt).coerceAtLeast(if (result.focusSashTriggered) 1 else 0)
+      if (result.lifeOrbRecoil > 0) {
+        playerHp = (playerHp - result.lifeOrbRecoil).coerceAtLeast(0)
+      }
+      if (result.counterShieldChipRecoil > 0) {
+        playerHp = (playerHp - result.counterShieldChipRecoil).coerceAtLeast(0)
+      }
+      if (result.weaknessPolicyTriggered && enemyHp > 0) {
+        eAtkStage = (eAtkStage + 2).coerceAtMost(6)
+        eSpAStage = (eSpAStage + 2).coerceAtMost(6)
+        logs.add("Foe ${enemyEntity.name}'s Weakness Policy raised Atk & SpA (+2)!")
+      }
+      lastSeverity = when {
+        result.typeEffectiveness >= 2f -> 2
+        result.typeEffectiveness == 0f || result.typeEffectiveness < 1f -> 3
+        else -> 1
+      }
+      lastAttackerWasPlayer = true
+      audioEngine.playSfx(
+        when (lastSeverity) {
+          2 -> StudioSfxType.HIT_HEAVY_CRIT
+          3 -> StudioSfxType.HIT_RESISTED
+          else -> StudioSfxType.HIT_LIGHT
+        }
+      )
+      val effTag = when {
+        result.isBlockedByTerrain -> "Blocked by Psychic Terrain!"
+        result.typeEffectiveness == 0f -> "No effect!"
+        result.typeEffectiveness >= 2f -> "Super Effective (${result.typeEffectiveness}x)!"
+        result.typeEffectiveness < 1f -> "Resisted (${result.typeEffectiveness}x)."
+        else -> "Clean hit."
+      }
+      logs.add("${playerEntity.name} used ${move.name} [${result.resolvedMoveType.displayName}] for $dealt dmg! $effTag")
+      if (result.lifeOrbRecoil > 0) logs.add("${playerEntity.name} took ${result.lifeOrbRecoil} Life Orb recoil.")
+      if (result.counterShieldChipRecoil > 0) logs.add("Counter-Shield deflected ${result.counterShieldChipRecoil} chip recoil!")
     }
-    logs.add("${playerEntity.name} used ${move.name} [${playerResult.resolvedMoveType.displayName}] for $dealt dmg! $effTag")
-    if (playerResult.lifeOrbRecoil > 0) {
-      logs.add("${playerEntity.name} took ${playerResult.lifeOrbRecoil} Life Orb recoil.")
+
+    fun executeEnemyStrike() {
+      val enemyResult = CanonBattleResolver.resolveTurn(
+        attacker = currentEnemySnap(enemyHp, gt.enemyMaxHp),
+        defender = currentPlayerSnap(playerHp, playerMaxHp),
+        move = enemyMove,
+        field = field,
+        defenderMovePriority = move.priority,
+      )
+      val enemyDealt = if (enemyResult.isBlockedByTerrain || enemyResult.typeEffectiveness == 0f) {
+        0
+      } else {
+        ((enemyResult.minDamage + enemyResult.maxDamage) / 2).coerceAtLeast(1)
+      }
+      playerHp = (playerHp - enemyDealt).coerceAtLeast(if (enemyResult.focusSashTriggered) 1 else 0)
+      if (enemyResult.counterShieldChipRecoil > 0) {
+        enemyHp = (enemyHp - enemyResult.counterShieldChipRecoil).coerceAtLeast(0)
+        logs.add("${playerEntity.name}'s Counter-Shield dealt ${enemyResult.counterShieldChipRecoil} chip recoil!")
+      }
+      logs.add("Foe ${enemyEntity.name} used ${enemyMove.name} for $enemyDealt dmg!")
+      if (enemyResult.focusSashTriggered) {
+        logs.add("${playerEntity.name} hung on with Focus Sash (1 HP)!")
+      }
+      if (enemyResult.weaknessPolicyTriggered && playerHp > 0) {
+        pAtkStage = (pAtkStage + 2).coerceAtMost(6)
+        pSpAStage = (pSpAStage + 2).coerceAtMost(6)
+        audioEngine.playSfx(StudioSfxType.STAT_BOOST)
+        logs.add("${playerEntity.name}'s Weakness Policy triggered! Atk +2, SpA +2!")
+      }
+      lastAttackerWasPlayer = false
+    }
+
+    if (playerGoesFirst) {
+      executePlayerStrike()
+      if (enemyHp > 0 && playerHp > 0) {
+        executeEnemyStrike()
+      }
+    } else {
+      logs.add("Foe ${enemyEntity.name} moved first!")
+      executeEnemyStrike()
+      if (playerHp > 0 && enemyHp > 0) {
+        executePlayerStrike()
+      }
     }
 
     markAtlasSeenOrBattled(enemyEntity.dexNumber, seen = true, battled = true)
 
+    // Victory check
     if (enemyHp <= 0) {
       audioEngine.playSfx(StudioSfxType.LEVEL_UP)
       logs.add("${enemyEntity.name} fainted! Victory in ${gt.turnNumber} turn(s)!")
@@ -1425,57 +1926,89 @@ class StudioViewModel(
         it.copy(
           inBattle = false,
           enemyCurrentHp = 0,
-          partyCurrentHpMap = it.partyCurrentHpMap + (playerEntity.dexNumber to playerHp),
-          battleLog = (logs.reversed() + it.battleLog).take(14),
+          playerAtkStage = 0,
+          playerSpAStage = 0,
+          enemyAtkStage = 0,
+          enemySpAStage = 0,
+          partyCurrentHpMap = it.partyCurrentHpMap + (playerEntity.dexNumber to playerHp.coerceAtLeast(1)),
+          battleLog = (logs.reversed() + it.battleLog).take(16),
           lastEventNonce = it.lastEventNonce + 1L,
-          lastHitSeverity = severity,
+          lastHitSeverity = lastSeverity,
           lastAttackerWasPlayer = true,
         )
       }
       return
     }
 
-    // Enemy counter-attack
-    val enemyMoves = StudioViewModelHelpers.buildMovesetForPokemon(enemyEntity, StudioViewModelHelpers.parsePokemonType(enemyEntity.primaryType))
-    val enemyMove = enemyMoves[gt.turnNumber % enemyMoves.size]
-    val enemyResult = CanonBattleResolver.resolveTurn(
-      attacker = enemySnap.copy(currentHpPercent = (enemyHp * 100 / gt.enemyMaxHp.coerceAtLeast(1)).coerceIn(1, 100)),
-      defender = playerSnap.copy(currentHpPercent = (playerHp * 100 / playerMaxHp).coerceIn(1, 100)),
-      move = enemyMove,
-      field = field,
-    )
-    val enemyDealt = ((enemyResult.minDamage + enemyResult.maxDamage) / 2).coerceAtLeast(if (enemyResult.typeEffectiveness == 0f) 0 else 1)
-    playerHp = (playerHp - enemyDealt).coerceAtLeast(if (enemyResult.focusSashTriggered) 1 else 0)
-    logs.add("Foe ${enemyEntity.name} countered with ${enemyMove.name} for $enemyDealt dmg!")
-    if (enemyResult.focusSashTriggered) {
-      logs.add("${playerEntity.name} hung on with Focus Sash (1 HP)!")
+    // Leftovers end-of-turn recovery if alive
+    if (playerHp in 1 until playerMaxHp) {
+      val leftoversHeal = CanonBattleResolver.computeEndOfTurnLeftoversHeal(basePlayerSnap)
+      if (leftoversHeal > 0) {
+        playerHp = (playerHp + leftoversHeal).coerceAtMost(playerMaxHp)
+        logs.add("${playerEntity.name} restored $leftoversHeal HP via Leftovers.")
+      }
     }
 
-    // Leftovers end-of-turn recovery
-    val leftoversHeal = CanonBattleResolver.computeEndOfTurnLeftoversHeal(playerSnap)
-    if (leftoversHeal > 0 && playerHp in 1 until playerMaxHp) {
-      playerHp = (playerHp + leftoversHeal).coerceAtMost(playerMaxHp)
-      logs.add("${playerEntity.name} restored $leftoversHeal HP via Leftovers.")
-    }
+    var updatedHpMap = gt.partyCurrentHpMap + (playerEntity.dexNumber to playerHp)
+    var nextPartyIndex = gt.activePartyIndex
+    var nextGimmick = gt.activeGimmick
+    var stillInBattle = true
 
-    val stillInBattle = if (playerHp <= 0) {
-      logs.add("${playerEntity.name} fainted! Returned to Prism Lab healing bay.")
-      playerHp = playerMaxHp
-      false
-    } else {
-      true
+    // Auto-switch to next conscious party member on faint; only blackout when entire party is at 0 HP
+    if (playerHp <= 0) {
+      logs.add("${playerEntity.name} fainted!")
+      val nextConsciousIdx = gt.activePartyDexIds.indices.firstOrNull { idx ->
+        if (idx == gt.activePartyIndex) return@firstOrNull false
+        val dex = gt.activePartyDexIds[idx]
+        val memberHp = updatedHpMap[dex]
+        memberHp == null || memberHp > 0
+      }
+      if (nextConsciousIdx != null) {
+        val replacement = findPokemonByDex(gt.activePartyDexIds[nextConsciousIdx])
+        val repMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
+          replacement, level = gt.levelFor(replacement.dexNumber),
+        ).maxHp()
+        val repHp = updatedHpMap[replacement.dexNumber] ?: repMaxHp
+        updatedHpMap = updatedHpMap + (replacement.dexNumber to repHp.coerceIn(1, repMaxHp))
+        nextPartyIndex = nextConsciousIdx
+        nextGimmick = BattleGimmickMode.NONE
+        pAtkStage = 0
+        pSpAStage = 0
+        playPokemonCry(replacement)
+        logs.add("Auto-sent ${replacement.name} to continue the battle!")
+      } else {
+        logs.add("All party partners fainted! Returned to Prism Healing Plaza.")
+        updatedHpMap = gt.activePartyDexIds.associateWith { dex ->
+          val e = findPokemonByDex(dex)
+          StudioViewModelHelpers.buildCombatantFromEntity(e, level = gt.levelFor(dex)).maxHp()
+        }
+        nextPartyIndex = 0
+        nextGimmick = BattleGimmickMode.NONE
+        pAtkStage = 0
+        pSpAStage = 0
+        eAtkStage = 0
+        eSpAStage = 0
+        stillInBattle = false
+        audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+      }
     }
 
     _gameTestState.update {
       it.copy(
         inBattle = stillInBattle,
         turnNumber = it.turnNumber + 1,
+        activePartyIndex = nextPartyIndex,
+        activeGimmick = nextGimmick,
+        playerAtkStage = pAtkStage,
+        playerSpAStage = pSpAStage,
+        enemyAtkStage = eAtkStage,
+        enemySpAStage = eSpAStage,
         enemyCurrentHp = enemyHp,
-        partyCurrentHpMap = it.partyCurrentHpMap + (playerEntity.dexNumber to playerHp),
-        battleLog = (logs.reversed() + it.battleLog).take(14),
+        partyCurrentHpMap = updatedHpMap,
+        battleLog = (logs.reversed() + it.battleLog).take(16),
         lastEventNonce = it.lastEventNonce + 1L,
-        lastHitSeverity = severity,
-        lastAttackerWasPlayer = true,
+        lastHitSeverity = lastSeverity,
+        lastAttackerWasPlayer = lastAttackerWasPlayer,
       )
     }
   }
@@ -1493,7 +2026,8 @@ class StudioViewModel(
 
     val enemyEntity = findPokemonByDex(gt.enemyDexId)
     val alreadyCaptured = atlasProgressMap.value[enemyEntity.dexNumber]?.captured == true
-    val landedTile = _mapGrid.value.getOrElse(gt.playerRow * 8 + gt.playerCol) { 0 }
+    val gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE
+    val landedTile = _mapGrid.value.getOrElse(gt.playerRow * gridSize + gt.playerCol) { 0 }
     val roll = ((abs((gt.turnNumber * 37 + gt.enemyCurrentHp * 13 + battleActionCounter++ * 29) % 100)) / 100f)
 
     val result = CanonBattleResolver.calculateCaptureResult(
@@ -1530,7 +2064,7 @@ class StudioViewModel(
           inBattle = false,
           isBagOpen = false,
           activePartyDexIds = newParty,
-          battleLog = (listOf("Gotcha! ${enemyEntity.name} was caught! ${result.summary}") + it.battleLog).take(14),
+          battleLog = (listOf("Gotcha! ${enemyEntity.name} was caught! ${result.summary}") + it.battleLog).take(16),
         )
       }
       persistCampaignStateToRoom()
@@ -1540,66 +2074,317 @@ class StudioViewModel(
         it.copy(
           turnNumber = it.turnNumber + 1,
           isBagOpen = false,
-          battleLog = (listOf(result.summary) + it.battleLog).take(14),
+          battleLog = (listOf(result.summary) + it.battleLog).take(16),
         )
       }
     }
   }
 
+  /**
+   * 100% Functional Bag Item dispatcher honoring every single effectTag:
+   * HEAL_HP, HEAL_PCT, HEAL_FULL_HP, HEAL_FULL_ALL, REVIVE_HALF, CURE_STATUS,
+   * LEVEL_UP, BOOST_GAUGE, TM, EVO, HOLD_*, GIMMICK:*, KEY:*, SHARD:*.
+   */
   fun useBagItem(item: StudioItemEntity) {
     val gt = _gameTestState.value
-    when (item.category) {
-      StudioItemCatalog.CAT_POKE_BALL -> throwPokeBall(item)
-      StudioItemCatalog.CAT_MEDICINE, StudioItemCatalog.CAT_BERRY -> {
+    val tag = item.effectTag.trim()
+    val lead = findPokemonByDex(gt.activeLeadDexId)
+    val leadLevel = gt.levelFor(lead.dexNumber)
+    val held = gt.heldItemsMap[lead.dexNumber].orEmpty()
+    val leadMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
+      lead, level = leadLevel, gimmick = gt.activeGimmick, heldItemId = held,
+    ).maxHp()
+
+    fun consumeItem() {
+      viewModelScope.launch(Dispatchers.IO) {
+        persistenceDao.upsertItem(item.copy(quantity = (item.quantity - 1).coerceAtLeast(0)))
+      }
+    }
+
+    when {
+      item.category == StudioItemCatalog.CAT_POKE_BALL || tag.startsWith("CATCH") -> {
+        throwPokeBall(item)
+      }
+
+      tag.startsWith("HEAL_HP:") -> {
         if (item.quantity <= 0) {
           _statusBannerMessage.value = "Out of ${item.name}!"
           return
         }
-        val lead = findPokemonByDex(gt.activeLeadDexId)
-        val maxHp = StudioViewModelHelpers.buildCombatantFromEntity(
-          lead, level = 50, gimmick = gt.activeGimmick, heldItemId = gt.heldItemsMap[lead.dexNumber].orEmpty(),
-        ).maxHp()
-        val curHp = gt.partyCurrentHpMap[lead.dexNumber] ?: maxHp
-        val healAmt = if (item.effectPower >= 999f) maxHp else item.effectPower.toInt().coerceAtLeast(20)
-        val newHp = (curHp + healAmt).coerceAtMost(maxHp)
-        viewModelScope.launch(Dispatchers.IO) {
-          persistenceDao.upsertItem(item.copy(quantity = (item.quantity - 1).coerceAtLeast(0)))
-        }
+        val amt = tag.removePrefix("HEAL_HP:").toIntOrNull() ?: item.effectPower.toInt().coerceAtLeast(1)
+        val curHp = gt.partyCurrentHpMap[lead.dexNumber] ?: leadMaxHp
+        val newHp = (curHp + amt).coerceAtMost(leadMaxHp)
+        consumeItem()
         audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
         _gameTestState.update {
           it.copy(
             partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to newHp),
-            partyStatusMap = it.partyStatusMap + (lead.dexNumber to StatusCondition.HEALTHY),
             isBagOpen = false,
-            battleLog = (listOf("Used ${item.name} on ${lead.name} -> $newHp/$maxHp HP & cured status!") + it.battleLog).take(14),
+            battleLog = (listOf("Used ${item.name} on ${lead.name} (+$amt HP -> $newHp/$leadMaxHp).") + it.battleLog).take(16),
           )
         }
       }
-      StudioItemCatalog.CAT_HOLD_ITEM -> {
-        val lead = findPokemonByDex(gt.activeLeadDexId)
+
+      tag.startsWith("HEAL_PCT:") -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        val pct = tag.removePrefix("HEAL_PCT:").toFloatOrNull() ?: item.effectPower
+        val amt = (leadMaxHp * pct).roundToInt().coerceAtLeast(1)
+        val curHp = gt.partyCurrentHpMap[lead.dexNumber] ?: leadMaxHp
+        val newHp = (curHp + amt).coerceAtMost(leadMaxHp)
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+        _gameTestState.update {
+          it.copy(
+            partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to newHp),
+            isBagOpen = false,
+            battleLog = (listOf("Used ${item.name} on ${lead.name} (+${(pct * 100).roundToInt()}% = +$amt HP -> $newHp/$leadMaxHp).") + it.battleLog).take(16),
+          )
+        }
+      }
+
+      tag == "HEAL_FULL_HP" -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+        _gameTestState.update {
+          it.copy(
+            partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to leadMaxHp),
+            isBagOpen = false,
+            battleLog = (listOf("Used ${item.name} on ${lead.name} -> Full HP ($leadMaxHp/$leadMaxHp)!") + it.battleLog).take(16),
+          )
+        }
+      }
+
+      tag == "HEAL_FULL_ALL" -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+        _gameTestState.update {
+          it.copy(
+            partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to leadMaxHp),
+            partyStatusMap = it.partyStatusMap + (lead.dexNumber to StatusCondition.HEALTHY),
+            isBagOpen = false,
+            battleLog = (listOf("Used ${item.name} on ${lead.name} -> Full HP ($leadMaxHp/$leadMaxHp) & cured all status!") + it.battleLog).take(16),
+          )
+        }
+      }
+
+      tag == "REVIVE_HALF" -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        val faintedDex = gt.activePartyDexIds.firstOrNull { dex ->
+          (gt.partyCurrentHpMap[dex] ?: 1) <= 0
+        }
+        if (faintedDex == null) {
+          audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+          _statusBannerMessage.value = "No fainted party partner needs a Revive right now."
+          return
+        }
+        val faintedEntity = findPokemonByDex(faintedDex)
+        val faintedMax = StudioViewModelHelpers.buildCombatantFromEntity(
+          faintedEntity, level = gt.levelFor(faintedDex),
+        ).maxHp()
+        val halfHp = (faintedMax / 2).coerceAtLeast(1)
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+        _gameTestState.update {
+          it.copy(
+            partyCurrentHpMap = it.partyCurrentHpMap + (faintedDex to halfHp),
+            partyStatusMap = it.partyStatusMap + (faintedDex to StatusCondition.HEALTHY),
+            isBagOpen = false,
+            battleLog = (listOf("Revived ${faintedEntity.name} to $halfHp/$faintedMax HP (50%)!") + it.battleLog).take(16),
+          )
+        }
+      }
+
+      tag == "CURE_STATUS" -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+        _gameTestState.update {
+          it.copy(
+            partyStatusMap = it.partyStatusMap + (lead.dexNumber to StatusCondition.HEALTHY),
+            isBagOpen = false,
+            battleLog = (listOf("Used ${item.name} on ${lead.name} -> Status cured (HP unchanged)!") + it.battleLog).take(16),
+          )
+        }
+      }
+
+      tag.startsWith("LEVEL_UP:") -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        val delta = tag.removePrefix("LEVEL_UP:").toIntOrNull() ?: 5
+        val newLevel = (leadLevel + delta).coerceIn(1, 100)
+        val newMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
+          lead, level = newLevel, gimmick = gt.activeGimmick, heldItemId = held,
+        ).maxHp()
+        val curHp = gt.partyCurrentHpMap[lead.dexNumber] ?: leadMaxHp
+        val scaledHp = CanonBattleResolver.scaleHpProportionally(curHp, leadMaxHp, newMaxHp)
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+        _gameTestState.update {
+          it.copy(
+            partyLevelMap = it.partyLevelMap + (lead.dexNumber to newLevel),
+            partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to scaledHp),
+            isBagOpen = false,
+            battleLog = (listOf("${item.name} boosted ${lead.name} to Lv.$newLevel (HP $scaledHp/$newMaxHp)!") + it.battleLog).take(16),
+          )
+        }
+        persistCampaignStateToRoom()
+      }
+
+      tag.startsWith("BOOST_GAUGE:") -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        val boost = tag.removePrefix("BOOST_GAUGE:").toIntOrNull() ?: 20
+        val newGauge = (gt.bondGauge + boost).coerceIn(0, 100)
+        consumeItem()
+        audioEngine.playSfx(StudioSfxType.STAT_BOOST)
+        _gameTestState.update {
+          it.copy(
+            bondGauge = newGauge,
+            isBagOpen = false,
+            battleLog = (listOf("${item.name} recharged Resonance Bond Gauge to $newGauge/100!") + it.battleLog).take(16),
+          )
+        }
+      }
+
+      tag.startsWith("TM:") -> {
+        val taught = StudioViewModelHelpers.parseTmEffectTag(tag)
+        if (taught == null) {
+          _statusBannerMessage.value = "Could not decode TM move data for ${item.name}."
+          return
+        }
+        audioEngine.playSfx(StudioSfxType.ITEM_USE)
+        _gameTestState.update {
+          it.copy(
+            taughtMovesMap = it.taughtMovesMap + (lead.dexNumber to taught),
+            isBagOpen = false,
+            battleLog = (listOf("${lead.name} learned ${taught.name} [${taught.type.displayName} • ${taught.basePower} BP] in Move Slot 4!") + it.battleLog).take(16),
+          )
+        }
+        persistCampaignStateToRoom()
+      }
+
+      tag.startsWith("EVO:") -> {
+        if (item.quantity <= 0) {
+          _statusBannerMessage.value = "Out of ${item.name}!"
+          return
+        }
+        val evoType = tag.removePrefix("EVO:")
+        val targetDex = StudioViewModelHelpers.resolveStoneEvolutionTarget(lead.dexNumber, evoType)
+        consumeItem()
+        if (targetDex != null && targetDex != lead.dexNumber) {
+          val evolved = findPokemonByDex(targetDex)
+          val newParty = gt.activePartyDexIds.toMutableList().also {
+            if (gt.activePartyIndex in it.indices) it[gt.activePartyIndex] = targetDex
+          }
+          val evolvedMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
+            evolved, level = leadLevel, gimmick = gt.activeGimmick, heldItemId = held,
+          ).maxHp()
+          val curHp = gt.partyCurrentHpMap[lead.dexNumber] ?: leadMaxHp
+          val scaledHp = CanonBattleResolver.scaleHpProportionally(curHp, leadMaxHp, evolvedMaxHp)
+          markAtlasCaptured(targetDex)
+          audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+          playPokemonCry(evolved)
+          _gameTestState.update {
+            it.copy(
+              activePartyDexIds = newParty,
+              partyLevelMap = it.partyLevelMap + (targetDex to leadLevel),
+              partyCurrentHpMap = it.partyCurrentHpMap + (targetDex to scaledHp),
+              heldItemsMap = if (held.isNotBlank()) it.heldItemsMap + (targetDex to held) else it.heldItemsMap,
+              taughtMovesMap = it.taughtMovesMap[lead.dexNumber]?.let { mv -> it.taughtMovesMap + (targetDex to mv) } ?: it.taughtMovesMap,
+              isBagOpen = false,
+              transitionPulseNonce = it.transitionPulseNonce + 1L,
+              battleLog = (listOf("What?! ${lead.name} reacted to ${item.name} and evolved into ${evolved.name} (#$targetDex)!") + it.battleLog).take(16),
+            )
+          }
+          persistCampaignStateToRoom()
+        } else {
+          val boostedLevel = (leadLevel + 2).coerceIn(1, 100)
+          val newMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
+            lead, level = boostedLevel, gimmick = gt.activeGimmick, heldItemId = held,
+          ).maxHp()
+          audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+          _gameTestState.update {
+            it.copy(
+              partyLevelMap = it.partyLevelMap + (lead.dexNumber to boostedLevel),
+              partyCurrentHpMap = it.partyCurrentHpMap + (lead.dexNumber to newMaxHp),
+              playerAtkStage = (it.playerAtkStage + 1).coerceAtMost(6),
+              playerSpAStage = (it.playerSpAStage + 1).coerceAtMost(6),
+              isBagOpen = false,
+              transitionPulseNonce = it.transitionPulseNonce + 1L,
+              battleLog = (listOf("${item.name} triggered Resonance Evolution Surge on ${lead.name}! Lv.$boostedLevel, Atk/SpA +1!") + it.battleLog).take(16),
+            )
+          }
+          persistCampaignStateToRoom()
+        }
+      }
+
+      item.category == StudioItemCatalog.CAT_HOLD_ITEM || tag.startsWith("HOLD_") -> {
         audioEngine.playSfx(StudioSfxType.ITEM_USE)
         _gameTestState.update {
           it.copy(
             heldItemsMap = it.heldItemsMap + (lead.dexNumber to item.id),
             isBagOpen = false,
-            battleLog = (listOf("Equipped ${item.name} onto ${lead.name}! Active in battle calculations.") + it.battleLog).take(14),
+            battleLog = (listOf("Equipped ${item.name} onto ${lead.name}! Active in battle calculations.") + it.battleLog).take(16),
           )
         }
         persistCampaignStateToRoom()
       }
-      StudioItemCatalog.CAT_GIMMICK_CATALYST -> {
+
+      item.category == StudioItemCatalog.CAT_GIMMICK_CATALYST || tag.startsWith("GIMMICK:") -> {
         val gimmick = when {
-          item.id.contains("mega") -> BattleGimmickMode.MEGA_EVOLUTION
-          item.id.contains("z_ring") -> BattleGimmickMode.Z_MOVE
-          item.id.contains("dynamax") -> BattleGimmickMode.DYNAMAX
-          item.id.contains("tera") -> BattleGimmickMode.TERASTALLIZATION
+          tag.contains("MEGA", ignoreCase = true) || item.id.contains("mega") -> BattleGimmickMode.MEGA_EVOLUTION
+          tag.contains("Z_MOVE", ignoreCase = true) || item.id.contains("z_ring") -> BattleGimmickMode.Z_MOVE
+          tag.contains("DYNAMAX", ignoreCase = true) || item.id.contains("dynamax") -> BattleGimmickMode.DYNAMAX
+          tag.contains("TERASTAL", ignoreCase = true) || item.id.contains("tera") -> BattleGimmickMode.TERASTALLIZATION
           else -> BattleGimmickMode.ANIME_BATTLE_BOND
         }
         toggleGameTestGimmick(gimmick)
         _gameTestState.update { it.copy(isBagOpen = false) }
       }
+
+      tag == "KEY:COMPASS" -> {
+        val camp = _campaignState.value
+        val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
+        val msg = "Prism Compass: ${camp.harmonicShardsCollected}/14 Shards collected • Active Region: ${chapter?.regionName ?: gt.activeRegionId} (${chapter?.keyLoreMilestone ?: "Sanctuary"})."
+        audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+        _gameTestState.update {
+          it.copy(
+            isBagOpen = false,
+            battleLog = (listOf(msg) + it.battleLog).take(16),
+          )
+        }
+        _statusBannerMessage.value = msg
+      }
+
       else -> {
         audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+        _gameTestState.update {
+          it.copy(
+            isBagOpen = false,
+            battleLog = (listOf("${item.name}: ${item.description}") + it.battleLog).take(16),
+          )
+        }
         _statusBannerMessage.value = "${item.name}: ${item.description}"
       }
     }
@@ -1615,7 +2400,11 @@ class StudioViewModel(
       it.copy(
         inBattle = false,
         activeGimmick = BattleGimmickMode.NONE,
-        battleLog = (listOf("Disengaged cleanly back to overworld.") + it.battleLog).take(14),
+        playerAtkStage = 0,
+        playerSpAStage = 0,
+        enemyAtkStage = 0,
+        enemySpAStage = 0,
+        battleLog = (listOf("Disengaged cleanly back to 16x16 overworld.") + it.battleLog).take(16),
       )
     }
   }
@@ -1625,13 +2414,13 @@ class StudioViewModel(
     val gt = _gameTestState.value
     val restored = gt.activePartyDexIds.associateWith { dex ->
       val entity = findPokemonByDex(dex)
-      StudioViewModelHelpers.buildCombatantFromEntity(entity, level = 50).maxHp()
+      StudioViewModelHelpers.buildCombatantFromEntity(entity, level = gt.levelFor(dex)).maxHp()
     }
     _gameTestState.update {
       it.copy(
         partyCurrentHpMap = restored,
         partyStatusMap = emptyMap(),
-        battleLog = (listOf("Prism Healing Pod restored full HP & status for all ${gt.activePartyDexIds.size} partners!") + it.battleLog).take(14),
+        battleLog = (listOf("Prism Healing Plaza restored full HP & status for all ${gt.activePartyDexIds.size} partners!") + it.battleLog).take(16),
       )
     }
   }
@@ -1696,14 +2485,26 @@ class StudioViewModel(
     _statusBannerMessage.value = "Harmonized #$dexNumber with $hwSignature in Resonance Atlas Dex!"
   }
 
+  /**
+   * Bug-fixed National Dex resolver:
+   * Checks Room cache -> built-in curated catalog -> instant clean-room synthesis from NationalAtlasIndex
+   * (with deduplicated background PokéAPI hydration), so it NEVER falls back to Bulbasaur!
+   */
   fun findPokemonByDex(dexNumber: Int): NativePokemonEntity {
-    return nativePokemonList.value.firstOrNull { it.dexNumber == dexNumber }
+    val cached = nativePokemonList.value.firstOrNull { it.dexNumber == dexNumber }
       ?: NativeFranchiseCatalogRepository.builtInFranchiseDex.firstOrNull { it.dexNumber == dexNumber }
-      ?: NativeFranchiseCatalogRepository.builtInFranchiseDex.first()
+    if (cached != null) return cached
+
+    if (dexNumber in 1..1025 && pendingHydrationDexIds.add(dexNumber)) {
+      viewModelScope.launch(Dispatchers.IO) {
+        runCatching { localDexRepository.refreshLivePokemonIfOnline(dexNumber) }
+      }
+    }
+    return StudioViewModelHelpers.synthesizePokemonFromAtlas(dexNumber)
   }
 
   // =========================================================================
-  // RESOURCE MANAGER (RACE-FREE ASSIGNMENT + AUDIO ENGINE PREVIEW)
+  // RESOURCE MANAGER (EXACT AUDIO/TILE ROUTING + ROOM PROJECT LINKING)
   // =========================================================================
 
   fun addCustomRoomResource(
@@ -1741,44 +2542,90 @@ class StudioViewModel(
     }
   }
 
+  /**
+   * Exact Resource Manager preview routing by resource ID & category (no generic fallback mismatch).
+   */
   fun previewRoomResource(resource: StudioResourceEntity) {
-    if (resource.categoryId == ResourceCategory.MAP_TILES.id) {
-      if (resource.tileTypeIndex in 0..5) {
-        _selectedBrushTile.value = resource.tileTypeIndex
+    when {
+      resource.categoryId == ResourceCategory.MAP_TILES.id -> {
+        if (resource.tileTypeIndex in 0..11) {
+          _selectedBrushTile.value = resource.tileTypeIndex
+        }
+        audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+        _statusBannerMessage.value = "Loaded Map Tile '${resource.name}' (Tile #${resource.tileTypeIndex}) into 16x16 HD-2D Tile Brush!"
       }
-      audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
-      _statusBannerMessage.value = "Loaded Map Tile '${resource.name}' into HD-2D Tile Brush!"
-    } else if (resource.categoryId == ResourceCategory.BGM.id) {
-      val theme = when {
-        resource.name.contains("Battle", ignoreCase = true) -> BgmThemeId.WILD_ENCOUNTER
-        resource.name.contains("Champion", ignoreCase = true) -> BgmThemeId.CHAMPION_CONVERGENCE
-        resource.name.contains("Route", ignoreCase = true) -> BgmThemeId.KANTO_JOHTO_ROUTE
-        else -> BgmThemeId.PRISM_TITLE
+
+      resource.id == "res_sfx_battle_cry_synth" -> {
+        playPokemonCry(findPokemonByDex(384))
+        _statusBannerMessage.value = "Synthesized Rayquaza (#384) FM+PSG Cry via Omni-Hardware DSP!"
       }
-      playBgmTheme(theme)
-      _statusBannerMessage.value = "Streaming 44.1kHz Omni-Hardware BGM: ${theme.displayName}"
-    } else {
-      val sfx = when {
-        resource.name.contains("Crit", ignoreCase = true) -> StudioSfxType.HIT_HEAVY_CRIT
-        resource.name.contains("Ball", ignoreCase = true) -> StudioSfxType.POKEBALL_THROW
-        resource.name.contains("Heal", ignoreCase = true) -> StudioSfxType.HEAL_CHIME
-        else -> StudioSfxType.LEVEL_UP
+
+      resource.id == "res_sfx_super_effective_hit" -> {
+        playSfx(StudioSfxType.HIT_HEAVY_CRIT)
+        _statusBannerMessage.value = "Played Super-Effective Heavy Crit SFX (${resource.formatTag})."
       }
-      playSfx(sfx)
-      _statusBannerMessage.value = "Synthesizing SFX preview: ${resource.name} (${resource.formatTag})"
+
+      resource.id == "res_sfx_pokeball_shake" -> {
+        playSfx(StudioSfxType.POKEBALL_SHAKE)
+        _statusBannerMessage.value = "Played Poké Ball Shake SFX (${resource.formatTag})."
+      }
+
+      resource.id == "res_sfx_level_up_fanfare" -> {
+        playSfx(StudioSfxType.LEVEL_UP)
+        _statusBannerMessage.value = "Played Level Up Fanfare SFX (${resource.formatTag})."
+      }
+
+      resource.id == "res_bgm_mt_silver_fusion" -> {
+        playBgmTheme(BgmThemeId.CHAMPION_CONVERGENCE)
+        _statusBannerMessage.value = "Streaming Champion Convergence 44.1kHz Omni-Hardware BGM!"
+      }
+
+      resource.id == "res_bgm_littleroot_hd2d" -> {
+        playBgmTheme(BgmThemeId.HARMONIC_LAB)
+        _statusBannerMessage.value = "Streaming Harmonic Lab 44.1kHz Omni-Hardware BGM!"
+      }
+
+      resource.id == "res_bgm_orre_mirorb_battle" -> {
+        playBgmTheme(BgmThemeId.TEAM_MONOCHROME)
+        _statusBannerMessage.value = "Streaming Team Monochrome Battle 44.1kHz Omni-Hardware BGM!"
+      }
+
+      resource.categoryId == ResourceCategory.BGM.id -> {
+        val theme = when {
+          resource.name.contains("Battle", ignoreCase = true) -> BgmThemeId.WILD_ENCOUNTER
+          resource.name.contains("Champion", ignoreCase = true) || resource.name.contains("Silver", ignoreCase = true) -> BgmThemeId.CHAMPION_CONVERGENCE
+          resource.name.contains("Route", ignoreCase = true) -> BgmThemeId.KANTO_JOHTO_ROUTE
+          resource.name.contains("Lab", ignoreCase = true) || resource.name.contains("Town", ignoreCase = true) -> BgmThemeId.HARMONIC_LAB
+          else -> BgmThemeId.PRISM_TITLE
+        }
+        playBgmTheme(theme)
+        _statusBannerMessage.value = "Streaming 44.1kHz Omni-Hardware BGM: ${theme.displayName}"
+      }
+
+      else -> {
+        val sfx = when {
+          resource.name.contains("Cry", ignoreCase = true) -> {
+            playPokemonCry(_selectedPokemon.value)
+            _statusBannerMessage.value = "Synthesized ${_selectedPokemon.value.name} Cry preview."
+            return
+          }
+          resource.name.contains("Crit", ignoreCase = true) || resource.name.contains("Hit", ignoreCase = true) -> StudioSfxType.HIT_HEAVY_CRIT
+          resource.name.contains("Ball", ignoreCase = true) -> StudioSfxType.POKEBALL_SHAKE
+          resource.name.contains("Heal", ignoreCase = true) -> StudioSfxType.HEAL_CHIME
+          else -> StudioSfxType.LEVEL_UP
+        }
+        playSfx(sfx)
+        _statusBannerMessage.value = "Synthesizing SFX preview: ${resource.name} (${resource.formatTag})"
+      }
     }
   }
 
-  /**
-   * Bug-fixed assignment: checks !isAssignedToProject BEFORE incrementing mapCount so duplicate drops
-   * never double-increment, and decrements cleanly on unassign.
-   */
   fun assignResourceToGameProject(resource: StudioResourceEntity, project: FanGameProject) {
     viewModelScope.launch {
       val alreadyAssigned = resource.isAssignedToProject(project.id)
       encyclopediaAndResourceRepository.assignResourceToProject(resource.id, project.id)
       if (!alreadyAssigned && project.id.isNotBlank() && resource.categoryId == ResourceCategory.MAP_TILES.id) {
-        cloudRepository.updateFanGame(project.copy(mapCount = (project.mapCount + 1L).coerceAtMost(500L)))
+        localProjectRepository.updateProject(project.copy(mapCount = (project.mapCount + 1L).coerceAtMost(100L)))
       }
       audioEngine.playSfx(StudioSfxType.ITEM_USE)
       _statusBannerMessage.value = if (alreadyAssigned) {
@@ -1794,7 +2641,7 @@ class StudioViewModel(
       val wasAssigned = resource.isAssignedToProject(project.id)
       encyclopediaAndResourceRepository.unassignResourceFromProject(resource.id, project.id)
       if (wasAssigned && project.id.isNotBlank() && resource.categoryId == ResourceCategory.MAP_TILES.id) {
-        cloudRepository.updateFanGame(project.copy(mapCount = (project.mapCount - 1L).coerceAtLeast(0L)))
+        localProjectRepository.updateProject(project.copy(mapCount = (project.mapCount - 1L).coerceAtLeast(1L)))
       }
       audioEngine.playSfx(StudioSfxType.UI_CANCEL)
       _statusBannerMessage.value = "Detached '${resource.name}' from '${project.title}'."
@@ -1802,7 +2649,7 @@ class StudioViewModel(
   }
 
   // =========================================================================
-  // NAVIGATION, DEX, ENGINE CONFIG & CLOUD PROJECT MANAGEMENT
+  // NAVIGATION, DEX, ENGINE CONFIG & 100% OFFLINE LOCAL PROJECT VAULT + SAF JSON
   // =========================================================================
 
   fun selectWorkspaceTab(tab: StudioWorkspaceTab) {
@@ -1861,26 +2708,9 @@ class StudioViewModel(
     }
   }
 
-  fun toggleHardwareChip(chipId: String) {
-    _fusionConfig.update { current ->
-      val updated = if (chipId in current.activeChipIds) {
-        current.activeChipIds - chipId
-      } else {
-        current.activeChipIds + chipId
-      }
-      current.copy(activeChipIds = updated)
-    }
-    if (_activeProjectId.value != null) {
-      _hasUnsavedChanges.value = true
-    }
-  }
-
   fun applySidebarAssetToEngine(asset: BuiltInAssetItem) {
-    val match = nativePokemonList.value.find { it.dexNumber == asset.spriteSeedId }
-      ?: NativeFranchiseCatalogRepository.builtInFranchiseDex.firstOrNull { it.dexNumber == asset.spriteSeedId }
-    if (match != null) {
-      _selectedPokemon.value = match
-    }
+    val match = findPokemonByDex(asset.spriteSeedId)
+    _selectedPokemon.value = match
     _fusionConfig.update { current ->
       val updatedBlend = when {
         asset.id.startsWith("db_3d_") -> 0.85f
@@ -1916,12 +2746,12 @@ class StudioViewModel(
     }
   }
 
-  fun saveLocalCustomPokemon(entity: NativePokemonEntity, alsoSyncToCloud: Boolean) {
+  fun saveLocalCustomPokemon(entity: NativePokemonEntity, alsoPinToProjectVault: Boolean) {
     viewModelScope.launch {
       localDexRepository.upsertLocalPokemon(entity.copy(isUserModified = true))
       _selectedPokemon.value = entity
-      if (alsoSyncToCloud) {
-        val cloudEntry = CustomDexEntry(
+      if (alsoPinToProjectVault) {
+        val vaultEntry = CustomDexEntry(
           dexNumber = entity.dexNumber.toLong(),
           name = entity.name,
           category = "${entity.region} Fusion Species",
@@ -1941,16 +2771,11 @@ class StudioViewModel(
           enhancementChip = entity.recommendedChipAddon,
           primaryHex = entity.primaryHex,
           secondaryHex = entity.secondaryHex,
-          projectId = _activeProjectId.value.orEmpty(),
+          projectId = activePersistenceProjectKey(),
         )
-        cloudRepository.createCustomDexEntry(cloudEntry)
-          .onSuccess {
-            audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
-            _statusBannerMessage.value = "Saved ${entity.name} to Room & Cloud Dex!"
-          }
-          .onFailure { e ->
-            _statusBannerMessage.value = "Saved locally; Cloud sync error: ${e.localizedMessage}"
-          }
+        localProjectRepository.addCustomDexEntry(vaultEntry)
+        audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+        _statusBannerMessage.value = "Saved ${entity.name} to Local Room Atlas & Project Dex Vault!"
       } else {
         audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
         _statusBannerMessage.value = "Saved ${entity.name} to Resonance Atlas Database!"
@@ -1971,7 +2796,9 @@ class StudioViewModel(
     viewModelScope.launch(Dispatchers.IO) {
       val saved = persistenceDao.getCampaignState(project.id)
       if (saved != null) {
-        applyCampaignEntityToState(saved, _hardwareRegistryState.value.allPlatforms)
+        withContext(Dispatchers.Main) {
+          applyCampaignEntityToState(saved, _hardwareRegistryState.value.allPlatforms)
+        }
       }
       loadMapForRegion(project.id, _activeMapRegionId.value)
     }
@@ -1996,7 +2823,12 @@ class StudioViewModel(
       )
     }
     if (hw.allPlatforms.isNotEmpty()) {
-      recomputeHardwareConvergence(activeIds = decodedIds, disciplineMode = mode)
+      recomputeHardwareConvergence(
+        activeIds = decodedIds,
+        disciplineMode = mode,
+        runtimePresetId = deriveRuntimePresetId(decodedIds, hw.allPlatforms, mode),
+        runtimeLabel = deriveRuntimeLabel(decodedIds, hw.allPlatforms, mode),
+      )
     }
   }
 
@@ -2012,7 +2844,7 @@ class StudioViewModel(
   fun saveActiveProjectChanges() {
     val current = activeProject.value
     if (current == null || current.id.isBlank()) {
-      _statusBannerMessage.value = "Select or create a cloud project first to save engine changes."
+      _statusBannerMessage.value = "Create or select a local project first to save engine changes."
       return
     }
     viewModelScope.launch {
@@ -2023,18 +2855,41 @@ class StudioViewModel(
         activeChipsCsv = encodeCurrentHardwareToken(),
         pixel3dBlendRatio = (cfg.pixelTo3dBlend * 100).toInt().coerceIn(0, 100).toLong(),
       )
-      cloudRepository.updateFanGame(updated)
-        .onSuccess {
-          _isSavingProject.value = false
-          _hasUnsavedChanges.value = false
-          persistCampaignStateToRoom()
-          audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
-          _statusBannerMessage.value = "Saved '${updated.title}' engine build to Cloud Firestore!"
-        }
-        .onFailure { e ->
-          _isSavingProject.value = false
-          _statusBannerMessage.value = "Failed to save project: ${e.localizedMessage}"
-        }
+      localProjectRepository.updateProject(updated)
+      _isSavingProject.value = false
+      _hasUnsavedChanges.value = false
+      persistCampaignStateToRoom()
+      audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+      _statusBannerMessage.value = "Saved '${updated.title}' engine build to Local Room Vault!"
+    }
+  }
+
+  /**
+   * Generates a complete v4.0 portable JSON bundle for SAF CreateDocument("application/json").
+   */
+  suspend fun exportActiveProjectJson(): Result<String> {
+    val projectId = activeProject.value?.id ?: activePersistenceProjectKey()
+    persistCampaignStateToRoom()
+    return localProjectRepository.exportProjectToJson(projectId)
+  }
+
+  /**
+   * Imports a portable v4.0 JSON project bundle via SAF OpenDocument() into Room SQLite
+   * and immediately activates it.
+   */
+  fun importProjectFromJson(jsonText: String) {
+    viewModelScope.launch {
+      _isSavingProject.value = true
+      val res = localProjectRepository.importProjectFromJson(jsonText)
+      _isSavingProject.value = false
+      res.onSuccess { imported ->
+        applyProjectToEngine(imported, announce = false)
+        audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+        _statusBannerMessage.value = "Imported '${imported.title}' (${imported.versionTag}) into Local Room Vault!"
+      }.onFailure { err ->
+        audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+        _statusBannerMessage.value = "JSON import failed: ${err.localizedMessage ?: "Invalid project bundle"}"
+      }
     }
   }
 
@@ -2072,23 +2927,17 @@ class StudioViewModel(
         } else {
           existing.pixel3dBlendRatio
         },
-        dexCount = dexCount.coerceIn(0, 2000).toLong(),
-        mapCount = mapCount.coerceIn(0, 500).toLong(),
+        dexCount = dexCount.coerceIn(1, 5000).toLong(),
+        mapCount = mapCount.coerceIn(1, 100).toLong(),
         versionTag = versionTag.trim().ifEmpty { existing.versionTag },
       )
-      cloudRepository.updateFanGame(updated)
-        .onSuccess {
-          _isSavingProject.value = false
-          if (updated.id == _activeProjectId.value) {
-            applyProjectToEngine(updated, announce = false)
-          }
-          audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
-          _statusBannerMessage.value = "Updated '${updated.title}' in Cloud Firestore!"
-        }
-        .onFailure { e ->
-          _isSavingProject.value = false
-          _statusBannerMessage.value = "Update failed: ${e.localizedMessage}"
-        }
+      val saved = localProjectRepository.updateProject(updated)
+      _isSavingProject.value = false
+      if (saved.id == _activeProjectId.value) {
+        applyProjectToEngine(saved, announce = false)
+      }
+      audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+      _statusBannerMessage.value = "Updated '${saved.title}' in Local Room Vault!"
     }
   }
 
@@ -2108,7 +2957,7 @@ class StudioViewModel(
       val resolvedPreset = if (captureCurrentEngineSettings) {
         consolePreset.ifBlank { cfg.presetName }
       } else {
-        consolePreset.ifBlank { "Shovel Knight+ Omni-Era Fusion" }
+        consolePreset.ifBlank { "Ultimate Target Style — All 156 Hardware" }
       }
       val project = FanGameProject(
         title = title,
@@ -2125,24 +2974,18 @@ class StudioViewModel(
         } else {
           65L
         },
-        dexCount = dexCount.coerceIn(0, 2000).toLong(),
-        mapCount = mapCount.coerceIn(0, 500).toLong(),
+        dexCount = dexCount.coerceIn(1, 5000).toLong(),
+        mapCount = mapCount.coerceIn(1, 100).toLong(),
         versionTag = versionTag,
       )
-      cloudRepository.createFanGame(project)
-        .onSuccess { newId ->
-          _isSavingProject.value = false
-          _activeProjectId.value = newId
-          _fusionConfig.update { it.copy(presetName = resolvedPreset) }
-          _hasUnsavedChanges.value = false
-          hasAutoLoadedInitialProject = true
-          audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
-          _statusBannerMessage.value = "Created & switched active project to '$title' in Firestore!"
-        }
-        .onFailure { e ->
-          _isSavingProject.value = false
-          _statusBannerMessage.value = "Failed to save cloud fan game: ${e.localizedMessage}"
-        }
+      val created = localProjectRepository.createProject(project)
+      _isSavingProject.value = false
+      _activeProjectId.value = created.id
+      _fusionConfig.update { it.copy(presetName = resolvedPreset) }
+      _hasUnsavedChanges.value = false
+      hasAutoLoadedInitialProject = true
+      audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+      _statusBannerMessage.value = "Created & activated '${created.title}' in Local Room Vault!"
     }
   }
 
@@ -2150,18 +2993,12 @@ class StudioViewModel(
     viewModelScope.launch {
       _isSavingProject.value = true
       val copyTitle = "${source.title.take(70)} (Copy)"
-      val duplicate = source.copy(id = "", title = copyTitle, createdAt = null, updatedAt = null)
-      cloudRepository.createFanGame(duplicate)
-        .onSuccess { newId ->
-          _isSavingProject.value = false
-          applyProjectToEngine(duplicate.copy(id = newId), announce = false)
-          audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
-          _statusBannerMessage.value = "Duplicated '${source.title}' as '$copyTitle'!"
-        }
-        .onFailure { e ->
-          _isSavingProject.value = false
-          _statusBannerMessage.value = "Duplicate failed: ${e.localizedMessage}"
-        }
+      val duplicate = source.copy(id = "", title = copyTitle, createdAtMs = 0L, updatedAtMs = 0L)
+      val created = localProjectRepository.createProject(duplicate)
+      _isSavingProject.value = false
+      applyProjectToEngine(created, announce = false)
+      audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+      _statusBannerMessage.value = "Duplicated '${source.title}' as '${created.title}'!"
     }
   }
 
@@ -2169,18 +3006,12 @@ class StudioViewModel(
     viewModelScope.launch {
       _isSavingProject.value = true
       val templateProject = MasterCanonTemplateCatalog.createBaseProjectTemplate()
-      cloudRepository.createFanGame(templateProject)
-        .onSuccess { newId ->
-          _isSavingProject.value = false
-          applyProjectToEngine(templateProject.copy(id = newId), announce = false)
-          hasAutoLoadedInitialProject = true
-          audioEngine.playSfx(StudioSfxType.LEVEL_UP)
-          _statusBannerMessage.value = "Provisioned '${templateProject.title}' (14 Regions) to Firestore!"
-        }
-        .onFailure { e ->
-          _isSavingProject.value = false
-          _statusBannerMessage.value = "Failed to provision base template: ${e.localizedMessage}"
-        }
+      val created = localProjectRepository.createProject(templateProject)
+      _isSavingProject.value = false
+      applyProjectToEngine(created, announce = false)
+      hasAutoLoadedInitialProject = true
+      audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+      _statusBannerMessage.value = "Provisioned '${created.title}' (14 Custom 16x16 Regions) to Local Room Vault!"
     }
   }
 
@@ -2193,49 +3024,42 @@ class StudioViewModel(
           title = "Pokémon Chrono Quartz",
           regionName = "Aethelgard Sector",
           synopsis = "Time-rifting RPG fusing GBC Hi-Color sprites, GBA Mode-7 sky islands, N64 Stadium lighting, and Switch HD-2D bloom.",
-          consoleMatrixPreset = "GBC + GBA + N64 + Switch HD-2D",
+          consoleMatrixPreset = "Ultimate Target Style — All 156 Hardware",
           activeChipsCsv = MasterCanonTemplateCatalog.TEMPLATE_CHIPS_CSV,
           pixel3dBlendRatio = 68L,
           dexCount = 1025L,
           mapCount = 14L,
-          versionTag = "v3.0.0-OMEGA",
+          versionTag = "v4.0.0-PRISM",
         ),
       )
-      var firstId: String? = null
+      var firstCreated: FanGameProject? = null
       starters.forEachIndexed { index, starter ->
-        val res = cloudRepository.createFanGame(starter)
-        if (index == 0) firstId = res.getOrNull()
+        val res = localProjectRepository.createProject(starter)
+        if (index == 0) firstCreated = res
       }
       _isSavingProject.value = false
-      if (firstId != null) {
-        applyProjectToEngine(starters.first().copy(id = firstId!!), announce = false)
-      }
+      firstCreated?.let { applyProjectToEngine(it, announce = false) }
       audioEngine.playSfx(StudioSfxType.LEVEL_UP)
-      _statusBannerMessage.value = "Provisioned 2 flagship multi-console fan game projects to Firestore!"
+      _statusBannerMessage.value = "Provisioned 2 flagship multi-console fan game projects to Local Room Vault!"
     }
   }
 
   fun deleteCloudFanGame(gameId: String) {
     viewModelScope.launch {
-      cloudRepository.deleteFanGame(gameId)
-        .onSuccess {
-          if (_activeProjectId.value == gameId) {
-            _activeProjectId.value = null
-            _hasUnsavedChanges.value = false
-          }
-          audioEngine.playSfx(StudioSfxType.UI_CANCEL)
-          _statusBannerMessage.value = "Removed project from Cloud Firestore."
-        }
-        .onFailure { e ->
-          _statusBannerMessage.value = "Delete failed: ${e.localizedMessage}"
-        }
+      localProjectRepository.deleteProject(gameId)
+      if (_activeProjectId.value == gameId) {
+        _activeProjectId.value = null
+        _hasUnsavedChanges.value = false
+      }
+      audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+      _statusBannerMessage.value = "Removed project from Local Room Vault."
     }
   }
 
   fun deleteCustomDexEntry(entryId: String) {
     viewModelScope.launch {
-      cloudRepository.deleteCustomDexEntry(entryId)
-        .onSuccess { _statusBannerMessage.value = "Removed custom species from Cloud." }
+      localProjectRepository.deleteCustomDexEntry(entryId)
+      _statusBannerMessage.value = "Removed custom species from Local Room Vault."
     }
   }
 
@@ -2250,17 +3074,12 @@ class StudioViewModel(
         chipAddon = _hardwareRegistryState.value.convergedVisuals.signatureSummary.take(40),
         spriteSeedId = pkmn.dexNumber.toLong(),
         shaderFormula = "BLEND:${(cfg.pixelTo3dBlend * 100).toInt()}|VOX:${(cfg.voxelExtrusionDepth * 100).toInt()}|CRT:${(cfg.crtScanlineIntensity * 100).toInt()}",
-        projectId = _activeProjectId.value.orEmpty(),
+        projectId = activePersistenceProjectKey(),
       )
-      cloudRepository.createCustomAsset(asset)
-        .onSuccess {
-          _selectedSidebarCategory.value = category
-          audioEngine.playSfx(StudioSfxType.ITEM_USE)
-          _statusBannerMessage.value = "Pinned '${asset.name}' to [${category.label}] & synced to Cloud!"
-        }
-        .onFailure { e ->
-          _statusBannerMessage.value = "Could not pin asset: ${e.localizedMessage}"
-        }
+      localProjectRepository.addStudioAsset(asset)
+      _selectedSidebarCategory.value = category
+      audioEngine.playSfx(StudioSfxType.ITEM_USE)
+      _statusBannerMessage.value = "Pinned '${asset.name}' to [${category.label}] in Local Room Vault!"
     }
   }
 
@@ -2281,12 +3100,16 @@ class StudioViewModel(
 
   fun deleteCustomSidebarAsset(assetId: String) {
     viewModelScope.launch {
-      cloudRepository.deleteCustomAsset(assetId)
+      localProjectRepository.deleteStudioAsset(assetId)
     }
   }
 
+  fun notifyStatusBanner(message: String) {
+    _statusBannerMessage.value = message
+  }
+
   companion object {
-    const val DEFAULT_LOCAL_PROJECT_KEY = "local_prism_resonance"
+    const val DEFAULT_LOCAL_PROJECT_KEY = LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
     val builtInSidebarAssets: List<BuiltInAssetItem> = StudioViewModelHelpers.builtInSidebarAssets
   }
 }

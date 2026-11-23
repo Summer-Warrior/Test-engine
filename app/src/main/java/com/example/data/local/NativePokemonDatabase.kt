@@ -87,8 +87,11 @@ interface NativePokemonDao {
     StudioItemEntity::class,
     AtlasProgressEntity::class,
     CampaignStateEntity::class,
+    FanGameProjectEntity::class,
+    CustomDexRoomEntity::class,
+    CustomAssetRoomEntity::class,
   ],
-  version = 3,
+  version = 4,
   exportSchema = false,
 )
 abstract class NativePokemonDatabase : RoomDatabase() {
@@ -96,6 +99,9 @@ abstract class NativePokemonDatabase : RoomDatabase() {
   abstract fun resourceDao(): StudioResourceDao
   abstract fun encyclopediaDao(): EncyclopediaDao
   abstract fun studioPersistenceDao(): StudioPersistenceDao
+  abstract fun fanGameProjectDao(): FanGameProjectDao
+  abstract fun customDexDao(): CustomDexDao
+  abstract fun customAssetDao(): CustomAssetDao
 
   companion object {
     @Volatile
@@ -252,6 +258,80 @@ abstract class NativePokemonDatabase : RoomDatabase() {
       }
     }
 
+    val MIGRATION_3_4 = object : Migration(3, 4) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `fan_game_projects` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `title` TEXT NOT NULL,
+            `regionName` TEXT NOT NULL,
+            `synopsis` TEXT NOT NULL,
+            `consoleMatrixPreset` TEXT NOT NULL,
+            `activeChipsCsv` TEXT NOT NULL,
+            `pixel3dBlendRatio` INTEGER NOT NULL,
+            `dexCount` INTEGER NOT NULL,
+            `mapCount` INTEGER NOT NULL,
+            `versionTag` TEXT NOT NULL,
+            `createdAtMs` INTEGER NOT NULL,
+            `updatedAtMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `custom_dex_entries` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `projectId` TEXT NOT NULL,
+            `dexNumber` INTEGER NOT NULL,
+            `name` TEXT NOT NULL,
+            `category` TEXT NOT NULL,
+            `primaryType` TEXT NOT NULL,
+            `secondaryType` TEXT NOT NULL,
+            `abilityName` TEXT NOT NULL,
+            `signatureMove` TEXT NOT NULL,
+            `loreDescription` TEXT NOT NULL,
+            `baseHp` INTEGER NOT NULL,
+            `baseAttack` INTEGER NOT NULL,
+            `baseDefense` INTEGER NOT NULL,
+            `baseSpAtk` INTEGER NOT NULL,
+            `baseSpDef` INTEGER NOT NULL,
+            `baseSpeed` INTEGER NOT NULL,
+            `baseSpriteId` INTEGER NOT NULL,
+            `fusionStylePreset` TEXT NOT NULL,
+            `enhancementChip` TEXT NOT NULL,
+            `primaryHex` TEXT NOT NULL,
+            `secondaryHex` TEXT NOT NULL,
+            `createdAtMs` INTEGER NOT NULL,
+            `updatedAtMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `custom_studio_assets` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `projectId` TEXT NOT NULL,
+            `name` TEXT NOT NULL,
+            `category` TEXT NOT NULL,
+            `consoleLineage` TEXT NOT NULL,
+            `chipAddon` TEXT NOT NULL,
+            `spriteSeedId` INTEGER NOT NULL,
+            `shaderFormula` TEXT NOT NULL,
+            `createdAtMs` INTEGER NOT NULL,
+            `updatedAtMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          "ALTER TABLE `campaign_state` ADD COLUMN `partyLevelsCsv` TEXT NOT NULL DEFAULT '25:50,6:50,94:50,448:50,658:50,384:50'"
+        )
+        db.execSQL(
+          "ALTER TABLE `campaign_state` ADD COLUMN `taughtMovesCsv` TEXT NOT NULL DEFAULT ''"
+        )
+      }
+    }
+
     fun getInstance(context: Context): NativePokemonDatabase {
       return INSTANCE ?: synchronized(this) {
         INSTANCE ?: Room.databaseBuilder(
@@ -259,7 +339,7 @@ abstract class NativePokemonDatabase : RoomDatabase() {
           NativePokemonDatabase::class.java,
           "pokefusion_native_dex.db",
         )
-          .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+          .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
           .build()
           .also { INSTANCE = it }
       }

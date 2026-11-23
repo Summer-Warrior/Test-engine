@@ -4,18 +4,21 @@ import android.graphics.Bitmap
 import com.example.data.model.CharacterMixMode
 import com.example.data.model.ExtraVisualAudioSettings
 import com.example.data.model.MasterDisciplineMode
+import com.example.engine.AudioConvergenceSolver
 import com.example.engine.BattleGimmickMode
+import com.example.engine.BattleMoveSpec
 import com.example.engine.BgmThemeId
 import com.example.engine.ConvergedAudioParams
 import com.example.engine.ConvergedVisualParams
 import com.example.engine.HardwareConvergenceSolver
 import com.example.engine.HardwarePlatformSpec
-import com.example.engine.UniversalHardwareRegistry
-import com.example.engine.AudioConvergenceSolver
+import com.example.engine.HardwareRuntimePresetCatalog
 import com.example.engine.PokemonType
+import com.example.engine.RegionPointOfInterest
 import com.example.engine.SpritePixelMatrixEngine
 import com.example.engine.StatusCondition
 import com.example.engine.TerrainCondition
+import com.example.engine.UniversalHardwareRegistry
 import com.example.engine.WeatherCondition
 
 enum class SpriteToolMode(val label: String) {
@@ -53,12 +56,13 @@ data class SpriteEditorUiState(
 }
 
 /**
- * Hoisted Game Test state so switching tabs NEVER loses player coordinates, battle HP, party, bag, or log.
+ * Hoisted Game Test state so switching tabs NEVER loses 16x16 coordinates, battle HP, levels,
+ * stat stages, taught TM moves, NPC dialogues, party, bag, or battle log.
  */
 data class GameTestUiState(
   val activeRegionId: String = "kanto",
-  val playerRow: Int = 5,
-  val playerCol: Int = 2,
+  val playerRow: Int = 13,
+  val playerCol: Int = 3,
   val stepsTaken: Int = 0,
   val inBattle: Boolean = false,
   val turnNumber: Int = 1,
@@ -66,6 +70,15 @@ data class GameTestUiState(
   val activePartyIndex: Int = 0,
   val partyCurrentHpMap: Map<Int, Int> = emptyMap(),
   val partyStatusMap: Map<Int, StatusCondition> = emptyMap(),
+  val partyLevelMap: Map<Int, Int> = mapOf(
+    25 to 50,
+    6 to 50,
+    94 to 50,
+    448 to 50,
+    658 to 50,
+    384 to 50,
+  ),
+  val taughtMovesMap: Map<Int, BattleMoveSpec> = emptyMap(),
   val heldItemsMap: Map<Int, String> = mapOf(
     25 to "life_orb",
     6 to "choice_specs",
@@ -74,6 +87,11 @@ data class GameTestUiState(
     658 to "choice_scarf",
     384 to "leftovers",
   ),
+  val playerAtkStage: Int = 0,
+  val playerSpAStage: Int = 0,
+  val enemyAtkStage: Int = 0,
+  val enemySpAStage: Int = 0,
+  val bondGauge: Int = 80,
   val enemyDexId: Int = 94,
   val enemyLevel: Int = 48,
   val enemyCurrentHp: Int = 135,
@@ -86,8 +104,10 @@ data class GameTestUiState(
   val terrain: TerrainCondition = TerrainCondition.NONE,
   val isBagOpen: Boolean = false,
   val selectedBagCategory: String = "POKE_BALL",
+  val activeDialoguePoi: RegionPointOfInterest? = null,
+  val showWarpGatePicker: Boolean = false,
   val battleLog: List<String> = listOf(
-    "Prof. Lyra Vance: Welcome to Pokémon: Prism Resonance! Explore tall wild grass or step onto a Prism Sanctuary.",
+    "Prof. Lyra Vance: Welcome to Pokémon: Prism Resonance v4.0! Explore 16x16 custom regions, chat with NPCs, or switch live hardware modes!",
   ),
   val lastEventNonce: Long = 0L,
   val lastHitSeverity: Int = 0, // 0=none, 1=normal, 2=super/crit, 3=resisted
@@ -96,18 +116,25 @@ data class GameTestUiState(
 ) {
   val activeLeadDexId: Int
     get() = activePartyDexIds.getOrElse(activePartyIndex) { activePartyDexIds.firstOrNull() ?: 25 }
+
+  fun levelFor(dexNumber: Int): Int = (partyLevelMap[dexNumber] ?: 50).coerceIn(1, 100)
 }
 
 /**
- * Hoisted Universal Hardware Registry & Convergence state (all 85+ real platforms 1962-2026).
+ * Hoisted Universal Hardware Registry & Convergence state (all 156 real platforms 1962-2026).
+ * Boots by default into Ultimate Target Style (All 156 Hardware — Shovel Knight+ Curated).
  */
 data class HardwareRegistryUiState(
   val allPlatforms: List<HardwarePlatformSpec> = emptyList(),
   val activePlatformIds: Set<String> = UniversalHardwareRegistry.defaultCuratedHardwareIds,
-  val allHardwareEnabled: Boolean = false,
+  val allHardwareEnabled: Boolean = true,
   val disciplineMode: MasterDisciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
   val characterMixMode: CharacterMixMode = CharacterMixMode.SPLIT_BEAM_MORPH,
   val extraPretty: ExtraVisualAudioSettings = ExtraVisualAudioSettings(),
+  val activeRuntimePresetId: String = HardwareRuntimePresetCatalog.MODE_ULTIMATE_CURATED,
+  val activeRuntimeLabel: String = "Ultimate Target Style — All 156 Hardware (Shovel Knight+ Curated)",
+  val isHardwareTourActive: Boolean = false,
+  val hardwareTourStepLabel: String = "",
   val convergedVisuals: ConvergedVisualParams = HardwareConvergenceSolver.solveVisuals(
     activePlatforms = emptyList(),
     disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
