@@ -18,9 +18,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -35,6 +39,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +58,12 @@ import com.example.data.model.CharacterMixMode
 import com.example.data.model.ConsoleFusionConfig
 import com.example.data.model.ExtraVisualAudioSettings
 import com.example.data.model.MasterDisciplineMode
+import com.example.engine.TrainerAppearanceConfig
+import com.example.engine.TrainerCatalogAndRigEngine
+import com.example.engine.TrainerCharacterSpec
+import com.example.engine.TrainerHeadgear
+import com.example.engine.TrainerOutfitStyle
+import com.example.engine.TrainerPose
 import com.example.ui.HardwareRegistryUiState
 import com.example.ui.shaders.omniDisplayPostEffect
 import com.example.ui.theme.CyberCyan
@@ -87,12 +101,29 @@ fun OmniConsoleFusionViewport(
   onUpdateExtraPretty: ((ExtraVisualAudioSettings) -> ExtraVisualAudioSettings) -> Unit,
   onPlayCry: () -> Unit,
   onPinToSidebar: (AssetCategory) -> Unit,
+  inspectTrainerMode: Boolean = false,
+  selectedTrainer: TrainerCharacterSpec = TrainerCatalogAndRigEngine.defaultProtagonist,
+  playerTrainer: TrainerCharacterSpec = TrainerCatalogAndRigEngine.defaultProtagonist,
+  onToggleInspectTrainerMode: (Boolean) -> Unit = {},
+  onSelectViewportTrainer: (TrainerCharacterSpec) -> Unit = {},
+  onUpdateProtagonistAppearance: ((TrainerAppearanceConfig) -> TrainerAppearanceConfig) -> Unit = {},
+  onSaveCustomTrainer: (TrainerCharacterSpec) -> Unit = {},
 ) {
   val visuals = hardwareState.convergedVisuals
   val audio = hardwareState.convergedAudio
   val activeIds = hardwareState.activePlatformIds
-  val primaryColor = parseHexColorSafe(primaryPokemon.primaryHex, CyberCyan)
-  val secondaryColor = parseHexColorSafe(secondaryPokemon.primaryHex, ElectricCrimson)
+  var selectedTrainerPose by remember { mutableStateOf(TrainerPose.BATTLE_IDLE) }
+  val activeStageTrainer = if (selectedTrainer.id == playerTrainer.id) playerTrainer else selectedTrainer
+  val primaryColor = if (inspectTrainerMode) {
+    parseHexColorSafe(activeStageTrainer.appearance.outfitPrimaryHex, CyberCyan)
+  } else {
+    parseHexColorSafe(primaryPokemon.primaryHex, CyberCyan)
+  }
+  val secondaryColor = if (inspectTrainerMode) {
+    parseHexColorSafe(activeStageTrainer.appearance.accentHex, ElectricCrimson)
+  } else {
+    parseHexColorSafe(secondaryPokemon.primaryHex, ElectricCrimson)
+  }
 
   val activeBitmapForStage = if (useCustomSprite) customSpriteBitmap else null
   val derivedStyle = when (hardwareState.characterMixMode) {
@@ -129,7 +160,11 @@ fun OmniConsoleFusionViewport(
               overflow = TextOverflow.Ellipsis,
             )
             Text(
-              text = "#${primaryPokemon.dexNumber} ${primaryPokemon.name} × ${secondaryPokemon.name}",
+              text = if (inspectTrainerMode) {
+                "${activeStageTrainer.name} • ${activeStageTrainer.title}"
+              } else {
+                "#${primaryPokemon.dexNumber} ${primaryPokemon.name} × ${secondaryPokemon.name}"
+              },
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
               color = StudioTextPrimary,
@@ -137,7 +172,11 @@ fun OmniConsoleFusionViewport(
               overflow = TextOverflow.Ellipsis,
             )
             Text(
-              text = "${visuals.disciplineMode.label} • Grid ${visuals.virtualPixelGrid.toInt()}px • ${visuals.characterStepFps}fps • ${visuals.voxelSliceCount} Voxel Slices",
+              text = if (inspectTrainerMode) {
+                "${activeStageTrainer.roleCategory.label} • ${activeStageTrainer.sourceInspiration} • ${activeStageTrainer.teamDexIds.size} Partners"
+              } else {
+                "${visuals.disciplineMode.label} • Grid ${visuals.virtualPixelGrid.toInt()}px • ${visuals.characterStepFps}fps • ${visuals.voxelSliceCount} Voxel Slices"
+              },
               style = MaterialTheme.typography.labelSmall,
               color = SuperFxGold,
               maxLines = 1,
@@ -153,6 +192,35 @@ fun OmniConsoleFusionViewport(
             Spacer(modifier = Modifier.width(4.dp))
             Text("Cry", color = CyberCyan)
           }
+        }
+
+        // Creature Rig vs Trainer Rig Stage Inspector Switcher
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          FilterChip(
+            selected = !inspectTrainerMode,
+            onClick = { onToggleInspectTrainerMode(false) },
+            label = { Text("Creature Rig (2D⇄3D)", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = CyberCyan.copy(alpha = 0.22f),
+              selectedLabelColor = CyberCyan,
+            ),
+            modifier = Modifier.testTag("viewport_mode_creature_chip"),
+          )
+          FilterChip(
+            selected = inspectTrainerMode,
+            onClick = { onToggleInspectTrainerMode(true) },
+            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(14.dp)) },
+            label = { Text("Trainer & Hero Studio (78+)", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = SuperFxGold.copy(alpha = 0.24f),
+              selectedLabelColor = SuperFxGold,
+            ),
+            modifier = Modifier.testTag("viewport_mode_trainer_chip"),
+          )
         }
 
         // Unified AGSL Stage with Shared MultiHardwareBattleStageBackdrop
@@ -182,17 +250,39 @@ fun OmniConsoleFusionViewport(
               activePlatformIds = activeIds,
             )
 
-            PokemonCharacterRenderer(
-              pokemon = primaryPokemon,
-              style = derivedStyle,
-              pixelTo3dBlend = config.pixelTo3dBlend,
-              extrusionDepth = visuals.voxelDepth,
-              size = 186.dp,
-              mixMode = hardwareState.characterMixMode,
-              visuals = visuals,
-              customSpriteBitmap = activeBitmapForStage,
-              modifier = Modifier.align(Alignment.Center),
-            )
+            if (inspectTrainerMode) {
+              TrainerCharacterRenderer(
+                trainer = activeStageTrainer,
+                pose = selectedTrainerPose,
+                characterMixMode = hardwareState.characterMixMode,
+                visuals = visuals,
+                cameraYawDegrees = (config.pixelTo3dBlend - 0.5f) * 70f,
+                modifier = Modifier
+                  .align(Alignment.Center)
+                  .size(188.dp),
+              )
+              // High-contrast 40x40 Dialogue Portrait inset
+              TrainerPortraitBadge(
+                trainer = activeStageTrainer,
+                size = 64.dp,
+                borderColor = SuperFxGold,
+                modifier = Modifier
+                  .align(Alignment.TopEnd)
+                  .padding(10.dp),
+              )
+            } else {
+              PokemonCharacterRenderer(
+                pokemon = primaryPokemon,
+                style = derivedStyle,
+                pixelTo3dBlend = config.pixelTo3dBlend,
+                extrusionDepth = visuals.voxelDepth,
+                size = 186.dp,
+                mixMode = hardwareState.characterMixMode,
+                visuals = visuals,
+                customSpriteBitmap = activeBitmapForStage,
+                modifier = Modifier.align(Alignment.Center),
+              )
+            }
 
             Box(
               modifier = Modifier
@@ -204,14 +294,18 @@ fun OmniConsoleFusionViewport(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             ) {
               Text(
-                text = hardwareState.characterMixMode.label.uppercase(),
+                text = if (inspectTrainerMode) {
+                  "${hardwareState.characterMixMode.shortTag} • ${selectedTrainerPose.label.uppercase()}"
+                } else {
+                  hardwareState.characterMixMode.label.uppercase()
+                },
                 fontFamily = PressStart2PFamily,
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberCyan,
               )
             }
 
-            if (activeBitmapForStage != null) {
+            if (!inspectTrainerMode && activeBitmapForStage != null) {
               Box(
                 modifier = Modifier
                   .align(Alignment.TopEnd)
@@ -226,6 +320,190 @@ fun OmniConsoleFusionViewport(
                   style = MaterialTheme.typography.labelSmall,
                   color = SgbEmerald,
                   fontWeight = FontWeight.Bold,
+                )
+              }
+            }
+          }
+        }
+
+        // Trainer Pose Switcher + Featured Cast Selector + Protagonist Customizer (when in Trainer Rig mode)
+        if (inspectTrainerMode) {
+          Text(
+            text = "TRAINER ANIMATION POSE (4-DIR WALK • BATTLE • CAPSULE THROW • VICTORY)",
+            style = MaterialTheme.typography.labelSmall,
+            color = CyberCyan,
+            fontWeight = FontWeight.Bold,
+          )
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            TrainerPose.entries.forEach { pose ->
+              FilterChip(
+                selected = selectedTrainerPose == pose,
+                onClick = { selectedTrainerPose = pose },
+                label = { Text(pose.label, style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = CyberCyan.copy(alpha = 0.22f),
+                  selectedLabelColor = CyberCyan,
+                ),
+                modifier = Modifier.testTag("trainer_pose_${pose.name.lowercase()}"),
+              )
+            }
+          }
+
+          Text(
+            text = "QUICK CAST SELECTOR (OR PICK ANY OF 78+ TRAINERS IN SIDEBAR → TRAINERS)",
+            style = MaterialTheme.typography.labelSmall,
+            color = StudioTextSecondary,
+            fontWeight = FontWeight.Bold,
+          )
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            val featuredCast = remember(playerTrainer) {
+              listOf(
+                playerTrainer,
+                TrainerCatalogAndRigEngine.findById("prof_lyra_vance"),
+                TrainerCatalogAndRigEngine.findById("rival_kael"),
+                TrainerCatalogAndRigEngine.findById("commander_vex"),
+                TrainerCatalogAndRigEngine.findById("leader_sinnoh"),
+                TrainerCatalogAndRigEngine.findById("leader_galar"),
+                TrainerCatalogAndRigEngine.findById("aura_guardian_sirion"),
+              ).filterNotNull().distinctBy { it.id }
+            }
+            featuredCast.forEach { spec ->
+              FilterChip(
+                selected = activeStageTrainer.id == spec.id,
+                onClick = { onSelectViewportTrainer(spec) },
+                label = { Text(spec.name, style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = SuperFxGold.copy(alpha = 0.24f),
+                  selectedLabelColor = SuperFxGold,
+                ),
+                modifier = Modifier.testTag("viewport_cast_${spec.id}"),
+              )
+            }
+          }
+
+          // Live Protagonist Customizer (drives Overworld Hero + Battle Hero + Room v5 custom_trainers)
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(12.dp))
+              .background(StudioDeepNavy)
+              .border(1.dp, SuperFxGold.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+              .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = "PROTAGONIST CUSTOMIZER (${playerTrainer.name.uppercase()})",
+                style = MaterialTheme.typography.labelSmall,
+                color = SuperFxGold,
+                fontWeight = FontWeight.Bold,
+              )
+              Button(
+                onClick = { onSaveCustomTrainer(activeStageTrainer) },
+                colors = ButtonDefaults.buttonColors(containerColor = SgbEmerald, contentColor = StudioDeepNavy),
+                modifier = Modifier.testTag("save_custom_trainer_room_button"),
+              ) {
+                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Save to Room", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+              }
+            }
+
+            // Outfit Palette Presets
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              TrainerCatalogAndRigEngine.outfitPalettePresets.forEach { (label, triple) ->
+                val active = playerTrainer.appearance.outfitPrimaryHex.equals(triple.first, ignoreCase = true)
+                FilterChip(
+                  selected = active,
+                  onClick = {
+                    onSelectViewportTrainer(playerTrainer)
+                    onUpdateProtagonistAppearance {
+                      it.copy(
+                        outfitPrimaryHex = triple.first,
+                        outfitSecondaryHex = triple.second,
+                        accentHex = triple.third,
+                      )
+                    }
+                  },
+                  label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                )
+              }
+            }
+
+            // Headgear Selector
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              TrainerHeadgear.entries.forEach { gear ->
+                FilterChip(
+                  selected = playerTrainer.appearance.headgear == gear,
+                  onClick = {
+                    onSelectViewportTrainer(playerTrainer)
+                    onUpdateProtagonistAppearance { it.copy(headgear = gear) }
+                  },
+                  label = { Text(gear.label, style = MaterialTheme.typography.labelSmall) },
+                  modifier = Modifier.testTag("customizer_headgear_${gear.name.lowercase()}"),
+                )
+              }
+            }
+
+            // Outfit Style Selector
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              TrainerOutfitStyle.entries.forEach { style ->
+                FilterChip(
+                  selected = playerTrainer.appearance.outfitStyle == style,
+                  onClick = {
+                    onSelectViewportTrainer(playerTrainer)
+                    onUpdateProtagonistAppearance { it.copy(outfitStyle = style) }
+                  },
+                  label = { Text(style.label, style = MaterialTheme.typography.labelSmall) },
+                  modifier = Modifier.testTag("customizer_outfit_${style.name.lowercase()}"),
+                )
+              }
+            }
+
+            // Hair Color + Hair Style
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              TrainerCatalogAndRigEngine.hairColorPresets.forEachIndexed { idx, (label, hex) ->
+                FilterChip(
+                  selected = playerTrainer.appearance.hairHex.equals(hex, ignoreCase = true),
+                  onClick = {
+                    onSelectViewportTrainer(playerTrainer)
+                    onUpdateProtagonistAppearance { it.copy(hairHex = hex, hairStyleIndex = idx % 6) }
+                  },
+                  label = { Text("Hair: $label", style = MaterialTheme.typography.labelSmall) },
                 )
               }
             }

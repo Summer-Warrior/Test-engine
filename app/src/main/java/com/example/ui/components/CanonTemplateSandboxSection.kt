@@ -63,6 +63,7 @@ import com.example.engine.MasterCanonTemplateCatalog
 import com.example.engine.NatureModifier
 import com.example.engine.PokemonType
 import com.example.engine.TerrainCondition
+import com.example.engine.TimeOfDayCycle
 import com.example.engine.WeatherCondition
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
@@ -307,7 +308,7 @@ fun CanonTemplateSandboxSection(
               )
             }
             Text(
-              text = "Shards: ${campaignState.harmonicShardsCollected}/14 • Badges: ${campaignState.badgesEarned} • Ribbons: ${campaignState.animeRibbonsAndKeys} • WCS Rank #${campaignState.worldCoronationRank}",
+              text = "Shards: ${campaignState.harmonicShardsCollected}/${MasterCanonTemplateCatalog.worldChapters.size} • Badges: ${campaignState.badgesEarned} • Ribbons: ${campaignState.animeRibbonsAndKeys} • WCS Rank #${campaignState.worldCoronationRank}",
               style = MaterialTheme.typography.bodySmall,
               color = SuperFxGold,
               fontWeight = FontWeight.SemiBold,
@@ -427,9 +428,14 @@ fun CanonTemplateSandboxSection(
             color = StudioTextPrimary,
           )
           Text(
-            text = "Anime Source: ${activeChapter.animeArcSource}",
+            text = "Anime / Manga / Spin-Off Fusion: ${activeChapter.fusionSourcesLineage}",
             style = MaterialTheme.typography.labelSmall,
             color = SuperFxGold,
+          )
+          Text(
+            text = "Landmark Silhouette: ${activeChapter.landmarkSilhouette.label} • Zones: ${activeChapter.subZones.joinToString(" · ") { it.name }}",
+            style = MaterialTheme.typography.labelSmall,
+            color = Mode7Sky,
           )
           Text(
             text = activeChapter.keyLoreMilestone,
@@ -463,6 +469,14 @@ fun CanonTemplateSandboxSection(
         }
       }
     }
+
+    // 3b. Drawn 22-Region Multi-Source World Atlas Preview
+    FullRegionsWorldAtlasCanvas(
+      activeRegionId = selectedRegionId,
+      completedRegionIds = campaignState.completedChapterIds,
+      timeOfDay = TimeOfDayCycle.DAY,
+      onSelectRegion = { selectedRegionId = it },
+    )
 
     // 4. Deterministic Multi-Era Battle & Anime Mechanics Sandbox
     Card(

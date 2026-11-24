@@ -90,8 +90,9 @@ interface NativePokemonDao {
     FanGameProjectEntity::class,
     CustomDexRoomEntity::class,
     CustomAssetRoomEntity::class,
+    CustomTrainerEntity::class,
   ],
-  version = 4,
+  version = 5,
   exportSchema = false,
 )
 abstract class NativePokemonDatabase : RoomDatabase() {
@@ -102,6 +103,7 @@ abstract class NativePokemonDatabase : RoomDatabase() {
   abstract fun fanGameProjectDao(): FanGameProjectDao
   abstract fun customDexDao(): CustomDexDao
   abstract fun customAssetDao(): CustomAssetDao
+  abstract fun customTrainerDao(): CustomTrainerDao
 
   companion object {
     @Volatile
@@ -332,6 +334,37 @@ abstract class NativePokemonDatabase : RoomDatabase() {
       }
     }
 
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `custom_trainers` (
+            `id` TEXT NOT NULL PRIMARY KEY,
+            `projectId` TEXT NOT NULL,
+            `name` TEXT NOT NULL,
+            `title` TEXT NOT NULL,
+            `roleCategory` TEXT NOT NULL,
+            `regionId` TEXT NOT NULL,
+            `skinHex` TEXT NOT NULL,
+            `hairHex` TEXT NOT NULL,
+            `outfitPrimaryHex` TEXT NOT NULL,
+            `outfitSecondaryHex` TEXT NOT NULL,
+            `accentHex` TEXT NOT NULL,
+            `headgearToken` TEXT NOT NULL,
+            `outfitStyleToken` TEXT NOT NULL,
+            `hairStyleIndex` INTEGER NOT NULL,
+            `companionPoseIndex` INTEGER NOT NULL,
+            `teamDexIdsCsv` TEXT NOT NULL,
+            `introQuote` TEXT NOT NULL,
+            `defeatQuote` TEXT NOT NULL,
+            `isPlayerAvatar` INTEGER NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+      }
+    }
+
     fun getInstance(context: Context): NativePokemonDatabase {
       return INSTANCE ?: synchronized(this) {
         INSTANCE ?: Room.databaseBuilder(
@@ -339,7 +372,7 @@ abstract class NativePokemonDatabase : RoomDatabase() {
           NativePokemonDatabase::class.java,
           "pokefusion_native_dex.db",
         )
-          .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+          .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
           .build()
           .also { INSTANCE = it }
       }

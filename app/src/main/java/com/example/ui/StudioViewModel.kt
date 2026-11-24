@@ -9,10 +9,13 @@ import coil.request.ImageRequest
 import com.example.data.local.AtlasProgressEntity
 import com.example.data.local.AtlasSpeciesIndexItem
 import com.example.data.local.CampaignStateEntity
+import com.example.data.local.CustomTrainerDao
+import com.example.data.local.CustomTrainerEntity
 import com.example.data.local.EncyclopediaEntryEntity
 import com.example.data.local.EncyclopediaSeedCatalog
 import com.example.data.local.EncyclopediaSourceStatusEntity
 import com.example.data.local.FranchiseEncyclopediaAndResourceRepository
+import com.example.data.local.NationalAtlasIndex
 import com.example.data.local.NativeFranchiseCatalogRepository
 import com.example.data.local.NativePokemonEntity
 import com.example.data.local.ResourceCategory
@@ -31,6 +34,7 @@ import com.example.data.model.ExtraVisualAudioSettings
 import com.example.data.model.FanGameProject
 import com.example.data.model.MasterDisciplineMode
 import com.example.data.repository.LocalStudioProjectRepository
+import com.example.engine.AmbientBedType
 import com.example.engine.AudioConvergenceSolver
 import com.example.engine.BattleGimmickMode
 import com.example.engine.BattleMoveSpec
@@ -39,6 +43,7 @@ import com.example.engine.BgmThemeId
 import com.example.engine.CampaignProgressionState
 import com.example.engine.CanonBattleResolver
 import com.example.engine.CanonRegionChapter
+import com.example.engine.DynamicBattleAudioState
 import com.example.engine.HardwareConvergenceSolver
 import com.example.engine.HardwarePlatformSpec
 import com.example.engine.HardwareRuntimePreset
@@ -48,12 +53,23 @@ import com.example.engine.MoveDirection
 import com.example.engine.OmniHardwareAudioEngine
 import com.example.engine.PoiInteractionKind
 import com.example.engine.PokemonType
+import com.example.engine.ProceduralCreatureRigEngine
 import com.example.engine.RegionPointOfInterest
 import com.example.engine.SpritePixelMatrixEngine
 import com.example.engine.StatStages
 import com.example.engine.StatusCondition
 import com.example.engine.StudioSfxType
 import com.example.engine.TerrainCondition
+import com.example.engine.TimeOfDayCycle
+import com.example.engine.TrainerAiTactic
+import com.example.engine.TrainerAppearanceConfig
+import com.example.engine.TrainerArchetype
+import com.example.engine.TrainerArchetypeCatalog
+import com.example.engine.TrainerBattleAiEngine
+import com.example.engine.TrainerCatalogAndRigEngine
+import com.example.engine.TrainerCharacterSpec
+import com.example.engine.TrainerPose
+import com.example.engine.TrainerRoleCategory
 import com.example.engine.UniversalGameFeelEngine
 import com.example.engine.UniversalHardwareRegistry
 import com.example.engine.WeatherCondition
@@ -147,11 +163,30 @@ class StudioViewModel(
   private val localDexRepository: NativeFranchiseCatalogRepository,
   private val encyclopediaAndResourceRepository: FranchiseEncyclopediaAndResourceRepository,
   private val persistenceDao: StudioPersistenceDao,
+  private val customTrainerDao: CustomTrainerDao? = null,
   private val audioEngine: OmniHardwareAudioEngine = OmniHardwareAudioEngine(),
 ) : ViewModel() {
 
   private val _activeTab = MutableStateFlow(StudioWorkspaceTab.FUSION_ENGINE)
   val activeTab: StateFlow<StudioWorkspaceTab> = _activeTab.asStateFlow()
+
+  // Hoisted Trainer & Protagonist Studio State (persisted to Room v5 custom_trainers)
+  private val _playerTrainer = MutableStateFlow(TrainerCatalogAndRigEngine.defaultProtagonist)
+  val playerTrainer: StateFlow<TrainerCharacterSpec> = _playerTrainer.asStateFlow()
+
+  private val _selectedViewportTrainer = MutableStateFlow(TrainerCatalogAndRigEngine.defaultProtagonist)
+  val selectedViewportTrainer: StateFlow<TrainerCharacterSpec> = _selectedViewportTrainer.asStateFlow()
+
+  private val _viewportInspectsTrainer = MutableStateFlow(false)
+  val viewportInspectsTrainer: StateFlow<Boolean> = _viewportInspectsTrainer.asStateFlow()
+
+  val customTrainers: StateFlow<List<CustomTrainerEntity>> =
+    (customTrainerDao?.observeAllCustomTrainers() ?: flowOf(emptyList()))
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000L),
+        initialValue = emptyList(),
+      )
 
   private val _selectedSidebarCategory = MutableStateFlow(AssetCategory.SPRITES)
   val selectedSidebarCategory: StateFlow<AssetCategory> = _selectedSidebarCategory.asStateFlow()
@@ -446,12 +481,24 @@ class StudioViewModel(
    */
   private fun prewarmStudioStartup() {
     viewModelScope.launch(Dispatchers.IO) {
+      // 0. Load compact offline 1,025-species (+ alternate forms) atlas manifest from assets
+      NationalAtlasIndex.initializeFromAssets(appContext)
+
       // 1. Ensure default master project exists in Room v4
       val defaultProject = localProjectRepository.ensureDefaultMasterProjectSeeded()
       val projectKey = _activeProjectId.value?.takeIf { it.isNotBlank() } ?: defaultProject.id
       if (_activeProjectId.value == null) {
         _activeProjectId.value = projectKey
         hasAutoLoadedInitialProject = true
+      }
+
+      // 1b. Restore saved Protagonist customization from Room v5 custom_trainers
+      customTrainerDao?.getSavedProtagonist()?.let { savedHero ->
+        val spec = savedHero.toTrainerSpec()
+        _playerTrainer.value = spec
+        if (_selectedViewportTrainer.value.id == TrainerCatalogAndRigEngine.defaultProtagonist.id) {
+          _selectedViewportTrainer.value = spec
+        }
       }
 
       // 2. Load & persist all 156 hardware profiles
@@ -517,16 +564,11 @@ class StudioViewModel(
       }
       loadMapForRegion(projectKey, _activeMapRegionId.value)
 
-      // 6. Warm Coil singleton cache for core party & starter sprites
-      val imageLoader = appContext.imageLoader
+      // 6. Pre-warm offline ProceduralCreatureRigEngine 2D & 3D bitmap cache for core party & starters
       val warmDexIds = listOf(1, 4, 7, 25, 6, 94, 384, 448, 658)
       warmDexIds.forEach { dexId ->
-        val url = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/$dexId.png"
-        imageLoader.enqueue(
-          ImageRequest.Builder(appContext)
-            .data(url)
-            .build()
-        )
+        ProceduralCreatureRigEngine.renderSpriteBitmap32(dexNumber = dexId, frameIndex = 0, scale = 4)
+        ProceduralCreatureRigEngine.renderCelVoxelModelBitmap(dexNumber = dexId, scale = 4)
       }
     }
   }
@@ -1009,8 +1051,97 @@ class StudioViewModel(
   }
 
   fun playBgmTheme(theme: BgmThemeId) {
-    audioEngine.playBgm(theme)
-    _audioConsoleState.update { it.copy(isBgmPlaying = true, activeBgmTheme = theme) }
+    val dyn = computeDynamicAudioState()
+    audioEngine.playBgm(theme, dyn)
+    _audioConsoleState.update {
+      it.copy(
+        isBgmPlaying = true,
+        activeBgmTheme = theme,
+        activeAmbientBed = dyn.ambientBed,
+        lowHpUrgencyActive = dyn.lowHpUrgency,
+        bossClimaxActive = dyn.bossFinalAceClimax,
+      )
+    }
+  }
+
+  fun toggleAmbientBed() {
+    val nextEnabled = !_audioConsoleState.value.ambientBedEnabled
+    _audioConsoleState.update { it.copy(ambientBedEnabled = nextEnabled) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+    syncDynamicAudioLayerForCurrentState()
+  }
+
+  private fun computeDynamicAudioState(): DynamicBattleAudioState {
+    val gt = _gameTestState.value
+    val audioUi = _audioConsoleState.value
+    val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
+      ?: MasterCanonTemplateCatalog.worldChapters.first()
+
+    val leadEntity = findPokemonByDex(gt.activeLeadDexId)
+    val leadMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
+      entity = leadEntity,
+      level = gt.levelFor(leadEntity.dexNumber),
+      gimmick = gt.activeGimmick,
+      heldItemId = gt.heldItemsMap[leadEntity.dexNumber].orEmpty(),
+    ).maxHp().coerceAtLeast(1)
+    val leadCurHp = (gt.partyCurrentHpMap[leadEntity.dexNumber] ?: leadMaxHp).coerceIn(0, leadMaxHp)
+    val lowHpUrgency = gt.inBattle && leadCurHp > 0 && leadCurHp * 4 < leadMaxHp
+
+    val isMajorBossBattle = gt.inBattle && (
+      gt.isBossEncounter ||
+        gt.activeEnemyTrainer?.roleCategory == TrainerRoleCategory.GYM_LEADER_WARDEN ||
+        gt.activeEnemyTrainer?.roleCategory == TrainerRoleCategory.CHAMPION_FRONTIER ||
+        gt.activeEnemyTrainer?.roleCategory == TrainerRoleCategory.VILLAIN_SYNDICATE
+      )
+    val consciousEnemyCount = if (gt.enemyPartyDexIds.isEmpty()) {
+      if (gt.enemyCurrentHp > 0) 1 else 0
+    } else {
+      gt.enemyPartyDexIds.count { dex -> (gt.enemyPartyCurrentHpMap[dex] ?: 1) > 0 }
+    }
+    val bossFinalAceClimax = isMajorBossBattle && consciousEnemyCount == 1
+
+    val ambientBed = if (gt.inBattle) AmbientBedType.NONE else chapter.resolveAmbientBed()
+    return DynamicBattleAudioState(
+      lowHpUrgency = lowHpUrgency,
+      bossFinalAceClimax = bossFinalAceClimax,
+      ambientBed = ambientBed,
+      ambientBedEnabled = audioUi.ambientBedEnabled,
+    )
+  }
+
+  private fun syncDynamicAudioLayerForCurrentState() {
+    val dyn = computeDynamicAudioState()
+    _audioConsoleState.update {
+      it.copy(
+        activeAmbientBed = dyn.ambientBed,
+        lowHpUrgencyActive = dyn.lowHpUrgency,
+        bossClimaxActive = dyn.bossFinalAceClimax,
+      )
+    }
+    audioEngine.updateDynamicAudioState(dyn)
+  }
+
+  private fun resolveBattleBgmTheme(
+    chapter: CanonRegionChapter,
+    isBoss: Boolean,
+    trainerArchetype: TrainerArchetype?,
+    enemyTrainer: TrainerCharacterSpec?,
+  ): BgmThemeId = when {
+    enemyTrainer?.id == "rival_kael" || enemyTrainer?.roleCategory == TrainerRoleCategory.RIVAL ->
+      BgmThemeId.RIVAL_KAEL
+    enemyTrainer?.roleCategory == TrainerRoleCategory.VILLAIN_SYNDICATE || chapter.id == "mystery_rift" ->
+      BgmThemeId.TEAM_MONOCHROME
+    enemyTrainer?.roleCategory == TrainerRoleCategory.CHAMPION_FRONTIER ||
+      (enemyTrainer?.roleCategory == TrainerRoleCategory.GYM_LEADER_WARDEN &&
+        (enemyTrainer.title.contains("Champion", ignoreCase = true) ||
+          chapter.id in setOf("blueberry_summit", "pasio", "aeos"))) ->
+      BgmThemeId.CHAMPION_CONVERGENCE
+    isBoss || enemyTrainer?.roleCategory == TrainerRoleCategory.GYM_LEADER_WARDEN ->
+      BgmThemeId.GYM_TRIAL
+    enemyTrainer != null || trainerArchetype != null ->
+      BgmThemeId.TRAINER_DUEL
+    else ->
+      BgmThemeId.WILD_ENCOUNTER
   }
 
   fun toggleBgmPlayback() {
@@ -1256,20 +1387,25 @@ class StudioViewModel(
   }
 
   fun loadSeedIntoSpriteEditor(pokemon: NativePokemonEntity) {
-    val pal = SpritePixelMatrixEngine.buildInitialPalette(pokemon.primaryHex, pokemon.secondaryHex)
-    val f0 = SpritePixelMatrixEngine.generateSeededFrame(pokemon.dexNumber, 0)
-    val f1 = SpritePixelMatrixEngine.generateSeededFrame(pokemon.dexNumber, 1)
+    val overridePrimary = if (pokemon.isUserModified) pokemon.primaryHex else null
+    val overrideSecondary = if (pokemon.isUserModified) pokemon.secondaryHex else null
+    val (pal, sampledFrames) = ProceduralCreatureRigEngine.sampleToSpriteEditor16(
+      dexNumber = pokemon.dexNumber,
+      customPrimaryHex = overridePrimary,
+      customSecondaryHex = overrideSecondary,
+    )
     updateSpriteStateWithBitmap { s ->
       s.copy(
         seedDexNumber = pokemon.dexNumber,
-        spriteName = "${pokemon.name} Omni-Sprite",
+        spriteName = "${pokemon.name} Procedural Rig",
         activeSavedSpriteId = null,
         paletteArgb = pal,
-        frames = listOf(f0, f1),
+        frames = sampledFrames,
         activeFrameIndex = 0,
         undoStack = emptyList(),
       )
     }
+    _statusBannerMessage.value = "Sampled #${pokemon.dexNumber.toString().padStart(4, '0')} ${pokemon.name} procedural rig into 2-frame editable Sprite Editor!"
   }
 
   fun toggleUseCustomSpriteInViewport() {
@@ -1431,13 +1567,21 @@ class StudioViewModel(
         battleLog = (listOf("Traveled to ${chapter.regionName} (${chapter.biomeStyle.label}): ${chapter.storyLogEntry}") + s.battleLog).take(16),
       )
     }
-    val regionTheme = BgmThemeId.fromId(chapter.defaultBgmThemeId)
+    val regionTheme = chapter.resolveBgmTheme()
     if (_audioConsoleState.value.isBgmPlaying) {
       playBgmTheme(regionTheme)
     } else {
-      _audioConsoleState.update { it.copy(activeBgmTheme = regionTheme) }
+      _audioConsoleState.update {
+        it.copy(
+          activeBgmTheme = regionTheme,
+          activeAmbientBed = chapter.resolveAmbientBed(),
+          lowHpUrgencyActive = false,
+          bossClimaxActive = false,
+        )
+      }
+      audioEngine.updateDynamicAudioState(computeDynamicAudioState())
     }
-    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+    audioEngine.playSfx(StudioSfxType.DOOR_WARP_SWOOSH)
     persistCampaignStateToRoom()
   }
 
@@ -1452,6 +1596,168 @@ class StudioViewModel(
 
   fun dismissDialogueBanner() {
     _gameTestState.update { it.copy(activeDialoguePoi = null) }
+  }
+
+  fun setTimeOfDayCycle(cycle: TimeOfDayCycle) {
+    _gameTestState.update {
+      it.copy(
+        timeOfDay = cycle,
+        battleLog = (listOf("Atmospheric lighting shifted to ${cycle.label} cycle.") + it.battleLog).take(16),
+      )
+    }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun toggleFullRegionView() {
+    _gameTestState.update { it.copy(showFullRegionView = !it.showFullRegionView) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun toggleWorldAtlas() {
+    _gameTestState.update { it.copy(showWorldAtlas = !it.showWorldAtlas) }
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+  }
+
+  fun toggleSubZoneLabels() {
+    _gameTestState.update { it.copy(showSubZoneLabels = !it.showSubZoneLabels) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun toggleViewportTrainerMode(enabled: Boolean) {
+    _viewportInspectsTrainer.value = enabled
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun selectTrainerForViewport(trainer: TrainerCharacterSpec, openViewportTab: Boolean = false) {
+    _selectedViewportTrainer.value = trainer
+    _viewportInspectsTrainer.value = true
+    if (openViewportTab) {
+      _activeTab.value = StudioWorkspaceTab.FUSION_ENGINE
+    }
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+  }
+
+  fun openHeroCustomizerInViewport() {
+    _selectedViewportTrainer.value = _playerTrainer.value
+    _viewportInspectsTrainer.value = true
+    _activeTab.value = StudioWorkspaceTab.FUSION_ENGINE
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+  }
+
+  fun updateProtagonistAppearance(transform: (TrainerAppearanceConfig) -> TrainerAppearanceConfig) {
+    val updated = _playerTrainer.value.copy(appearance = transform(_playerTrainer.value.appearance))
+    _playerTrainer.value = updated
+    if (_selectedViewportTrainer.value.id == updated.id) {
+      _selectedViewportTrainer.value = updated
+    }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+    viewModelScope.launch(Dispatchers.IO) {
+      val projId = _activeProjectId.value ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
+      customTrainerDao?.upsertCustomTrainer(
+        CustomTrainerEntity.fromTrainerSpec(updated, projectId = projId, isPlayerAvatar = true)
+      )
+    }
+  }
+
+  fun saveCustomTrainerToRoom(spec: TrainerCharacterSpec) {
+    val projId = _activeProjectId.value ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
+    val isHero = spec.id == _playerTrainer.value.id
+    val saveId = if (isHero) spec.id else "custom_${spec.id}_${System.currentTimeMillis() % 10000}"
+    val entity = CustomTrainerEntity.fromTrainerSpec(
+      spec = spec.copy(id = saveId),
+      projectId = projId,
+      isPlayerAvatar = isHero,
+    )
+    viewModelScope.launch(Dispatchers.IO) {
+      customTrainerDao?.upsertCustomTrainer(entity)
+    }
+    audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+    _statusBannerMessage.value = "Saved Trainer '${spec.name}' (${spec.appearance.outfitStyle.label}) to Room v5!"
+  }
+
+  fun deleteCustomTrainerFromRoom(trainerId: String) {
+    viewModelScope.launch(Dispatchers.IO) {
+      customTrainerDao?.deleteCustomTrainer(trainerId)
+    }
+    audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+    _statusBannerMessage.value = "Removed custom Trainer from Room v5 vault."
+  }
+
+  fun dismissTrainerVsBanner() {
+    _gameTestState.update { it.copy(showTrainerVsBanner = false, enemyTrainerPose = TrainerPose.BATTLE_IDLE) }
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+  }
+
+  fun toggleTrailingPartner() {
+    _gameTestState.update { it.copy(showTrailingPartner = !it.showTrailingPartner) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun challengeTrainerArchetype(archetype: TrainerArchetype) {
+    val gt = _gameTestState.value
+    val trainerSpec = TrainerCatalogAndRigEngine.resolveTrainerForArchetype(
+      archetype = archetype,
+      regionId = gt.activeRegionId,
+      seedNonce = gt.stepsTaken + battleActionCounter++,
+    )
+    val enemyDex = trainerSpec.teamDexIds.firstOrNull() ?: TrainerArchetypeCatalog.resolveEnemyDexForTrainer(
+      archetype = archetype,
+      regionId = gt.activeRegionId,
+      seedNonce = gt.stepsTaken + battleActionCounter++,
+    )
+    triggerEncounterWithSpecificDex(
+      enemyDex = enemyDex,
+      isBoss = archetype.levelOffset >= 4,
+      titlePrefix = trainerSpec.name,
+      trainerArchetype = archetype,
+      enemyTrainer = trainerSpec,
+    )
+  }
+
+  fun summonWildPokemonByDex(dexNumber: Int) {
+    val safeDex = dexNumber.coerceIn(1, NationalAtlasIndex.TOTAL_NATIONAL_SPECIES)
+    triggerEncounterWithSpecificDex(
+      enemyDex = safeDex,
+      isBoss = false,
+      titlePrefix = "Wild",
+      trainerArchetype = null,
+    )
+  }
+
+  fun addPokemonToActiveParty(dexNumber: Int) {
+    val safeDex = dexNumber.coerceIn(1, NationalAtlasIndex.TOTAL_NATIONAL_SPECIES)
+    val gt = _gameTestState.value
+    val entity = findPokemonByDex(safeDex)
+    val existingIdx = gt.activePartyDexIds.indexOf(safeDex)
+    if (existingIdx >= 0) {
+      switchGameTestPartySlot(existingIdx)
+      return
+    }
+    val updatedParty = if (gt.activePartyDexIds.size < 6) {
+      gt.activePartyDexIds + safeDex
+    } else {
+      gt.activePartyDexIds.toMutableList().also { list ->
+        val slot = gt.activePartyIndex.coerceIn(0, list.lastIndex)
+        list[slot] = safeDex
+      }
+    }
+    val newIdx = updatedParty.indexOf(safeDex).coerceAtLeast(0)
+    val level = gt.partyLevelMap[safeDex] ?: 50
+    val maxHp = StudioViewModelHelpers.buildCombatantFromEntity(entity, level = level).maxHp()
+    audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+    playPokemonCry(entity)
+    _gameTestState.update {
+      it.copy(
+        activePartyDexIds = updatedParty,
+        activePartyIndex = newIdx,
+        partyLevelMap = it.partyLevelMap + (safeDex to level),
+        partyCurrentHpMap = it.partyCurrentHpMap + (safeDex to maxHp),
+        activeGimmick = BattleGimmickMode.NONE,
+        battleLog = (listOf("Recruited #${safeDex.toString().padStart(4, '0')} ${entity.name} (Lv.$level) into Active Party!") + it.battleLog).take(16),
+      )
+    }
+    markAtlasSeenOrBattled(safeDex, seen = true, battled = false)
+    persistCampaignStateToRoom()
   }
 
   fun movePlayerOnOverworld(dRow: Int, dCol: Int) {
@@ -1473,6 +1779,8 @@ class StudioViewModel(
       tiles = tiles,
     )
     if (newRow == gt.playerRow && newCol == gt.playerCol) {
+      // Still rotate Trainer facing direction on bumped tile for crisp RPG feel
+      _gameTestState.update { it.copy(playerFacing = moveDir) }
       audioEngine.playSfx(StudioSfxType.UI_CANCEL)
       return
     }
@@ -1487,8 +1795,12 @@ class StudioViewModel(
     val newSteps = gt.stepsTaken + 1
     _gameTestState.update {
       it.copy(
+        prevPlayerRow = gt.playerRow,
+        prevPlayerCol = gt.playerCol,
         playerRow = newRow,
         playerCol = newCol,
+        playerFacing = moveDir,
+        playerWalkStep = it.playerWalkStep + 1,
         stepsTaken = newSteps,
         activeDialoguePoi = null,
       )
@@ -1499,7 +1811,7 @@ class StudioViewModel(
       5 -> triggerManualEncounter(isBoss = true)
       8 -> healFullParty()
       11 -> {
-        audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+        audioEngine.playSfx(StudioSfxType.DOOR_WARP_SWOOSH)
         _gameTestState.update {
           it.copy(
             showWarpGatePicker = true,
@@ -1576,41 +1888,82 @@ class StudioViewModel(
   }
 
   fun triggerPoiBattle(poi: RegionPointOfInterest) {
-    val dex = poi.battleDexSeed
+    val regionId = _gameTestState.value.activeRegionId
+    val npcTrainer = TrainerCatalogAndRigEngine.resolveTrainerForPoi(poi, regionId)
+    val archetype = poi.trainerArchetypeId?.let { TrainerArchetypeCatalog.findById(it) }
     _gameTestState.update { it.copy(activeDialoguePoi = null) }
     val isRival = poi.interactionKind == PoiInteractionKind.RIVAL_OR_CHALLENGER
-    if (dex != null) {
-      triggerEncounterWithSpecificDex(
-        enemyDex = dex,
-        isBoss = isRival,
-        titlePrefix = if (isRival) poi.name else "Guardian",
-      )
+    val leadDex = poi.battleDexSeed ?: npcTrainer.teamDexIds.firstOrNull() ?: 25
+    val team = if (poi.battleDexSeed != null && !npcTrainer.teamDexIds.contains(poi.battleDexSeed)) {
+      (listOf(poi.battleDexSeed) + npcTrainer.teamDexIds).take(6)
     } else {
-      triggerManualEncounter(isBoss = isRival)
+      npcTrainer.teamDexIds.ifEmpty { listOf(leadDex) }
     }
+    triggerEncounterWithSpecificDex(
+      enemyDex = team.first(),
+      isBoss = isRival,
+      titlePrefix = npcTrainer.name,
+      trainerArchetype = archetype,
+      enemyTrainer = npcTrainer.copy(teamDexIds = team),
+    )
   }
 
   fun triggerManualEncounter(isBoss: Boolean) {
     val gt = _gameTestState.value
     val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
       ?: MasterCanonTemplateCatalog.worldChapters.first()
-    val pool = chapter.encounterPoolDexIds.ifEmpty { listOf(25, 94, 384) }
-    val enemyDex = if (isBoss) {
-      pool.last()
-    } else {
-      pool[abs(gt.stepsTaken + battleActionCounter++) % pool.size]
+    if (isBoss) {
+      val bossTrainer = TrainerCatalogAndRigEngine.resolveBossTrainerForRegion(chapter.id)
+      val bossArchetype = chapter.regionalTrainerClassIds.lastOrNull()?.let { TrainerArchetypeCatalog.findById(it) }
+      triggerEncounterWithSpecificDex(
+        enemyDex = bossTrainer.teamDexIds.firstOrNull() ?: chapter.encounterPoolDexIds.lastOrNull() ?: 384,
+        isBoss = true,
+        titlePrefix = bossTrainer.name,
+        trainerArchetype = bossArchetype,
+        enemyTrainer = bossTrainer,
+      )
+      return
     }
-    val prefix = if (isBoss) "Prism Sanctuary Guardian" else "Wild"
-    triggerEncounterWithSpecificDex(enemyDex, isBoss, prefix)
+    val fullRegionalPool = NationalAtlasIndex.dexPoolForRegion(chapter.id)
+    val pool = (chapter.encounterPoolDexIds + fullRegionalPool).distinct().ifEmpty { listOf(25, 94, 384) }
+    val enemyDex = pool[abs(gt.stepsTaken * 7 + battleActionCounter++ * 13) % pool.size]
+    triggerEncounterWithSpecificDex(enemyDex, isBoss = false, titlePrefix = "Wild", trainerArchetype = null, enemyTrainer = null)
   }
 
-  private fun triggerEncounterWithSpecificDex(enemyDex: Int, isBoss: Boolean, titlePrefix: String) {
+  private fun triggerEncounterWithSpecificDex(
+    enemyDex: Int,
+    isBoss: Boolean,
+    titlePrefix: String,
+    trainerArchetype: TrainerArchetype? = null,
+    enemyTrainer: TrainerCharacterSpec? = null,
+  ) {
     val gt = _gameTestState.value
     val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
       ?: MasterCanonTemplateCatalog.worldChapters.first()
-    val enemyEntity = findPokemonByDex(enemyDex)
-    val enemyLevel = if (isBoss) 55 else 46
-    val enemySnap = StudioViewModelHelpers.buildCombatantFromEntity(enemyEntity, level = enemyLevel)
+    val enemyParty = enemyTrainer?.teamDexIds?.takeIf { it.isNotEmpty() } ?: listOf(enemyDex)
+    val activeEnemyDex = enemyParty.first()
+    val enemyEntity = findPokemonByDex(activeEnemyDex)
+    val baseEnemyLevel = if (isBoss) 55 else 46
+    val enemyLevel = (baseEnemyLevel + (trainerArchetype?.levelOffset ?: 0)).coerceIn(5, 100)
+    val preferredGimmick = enemyTrainer?.preferredGimmick ?: trainerArchetype?.preferredGimmick ?: BattleGimmickMode.NONE
+    val initialMaxHpMap = enemyParty.associateWith { dex ->
+      val e = findPokemonByDex(dex)
+      val isAceSlot = dex == enemyParty.last() && enemyParty.size == 1
+      StudioViewModelHelpers.buildCombatantFromEntity(
+        entity = e,
+        level = enemyLevel,
+        gimmick = if (isAceSlot) preferredGimmick else BattleGimmickMode.NONE,
+      ).maxHp()
+    }
+    val initialCurHpMap = initialMaxHpMap.toMap()
+    val activeSlotGimmick = TrainerBattleAiEngine.resolveGimmickForEnemySlot(
+      preferredGimmick = preferredGimmick,
+      partyDexIds = enemyParty,
+      activeIndex = 0,
+      hpMap = initialCurHpMap,
+    )
+    val activeMaxHp = initialMaxHpMap[activeEnemyDex] ?: 140
+
     val leadEntity = findPokemonByDex(gt.activeLeadDexId)
     val leadLevel = gt.levelFor(leadEntity.dexNumber)
     val leadSnap = StudioViewModelHelpers.buildCombatantFromEntity(
@@ -1622,13 +1975,25 @@ class StudioViewModel(
     val existingLeadHp = gt.partyCurrentHpMap[leadEntity.dexNumber]?.takeIf { it > 0 } ?: leadSnap.maxHp()
     val updatedHpMap = gt.partyCurrentHpMap + (leadEntity.dexNumber to existingLeadHp.coerceAtMost(leadSnap.maxHp()))
 
-    audioEngine.playSfx(StudioSfxType.ENCOUNTER_STING)
-    playPokemonCry(enemyEntity)
-    if (_audioConsoleState.value.isBgmPlaying) {
-      playBgmTheme(if (isBoss) BgmThemeId.GYM_TRIAL else BgmThemeId.WILD_ENCOUNTER)
-    }
+    val resolvedWeather = enemyTrainer?.preferredWeather?.takeIf { it != WeatherCondition.CLEAR }
+      ?: trainerArchetype?.preferredWeather?.takeIf { it != WeatherCondition.CLEAR }
+      ?: chapter.weatherPreset
 
-    markAtlasSeenOrBattled(enemyDex, seen = true, battled = false)
+    val isTrainerOrBoss = isBoss || trainerArchetype != null || enemyTrainer != null
+    audioEngine.playSfx(if (isTrainerOrBoss) StudioSfxType.TRAINER_EYE_CONTACT else StudioSfxType.ENCOUNTER_STING)
+    playPokemonCry(enemyEntity)
+    val battleTheme = resolveBattleBgmTheme(chapter, isBoss, trainerArchetype, enemyTrainer)
+
+    markAtlasSeenOrBattled(activeEnemyDex, seen = true, battled = false)
+
+    val introLogs = buildList {
+      if (enemyTrainer != null) {
+        add("${enemyTrainer.name} (${enemyTrainer.title}) [${enemyParty.size} Partners]: \"${enemyTrainer.introQuote}\"")
+      } else if (trainerArchetype != null) {
+        add("${trainerArchetype.className} [${trainerArchetype.aiTactic.label}]: \"${trainerArchetype.introQuote}\"")
+      }
+      add("$titlePrefix sent ${enemyEntity.name} (#${activeEnemyDex.toString().padStart(4, '0')} • Lv.$enemyLevel) in ${chapter.regionName}!")
+    }
 
     _gameTestState.update {
       it.copy(
@@ -1639,19 +2004,36 @@ class StudioViewModel(
         playerSpAStage = 0,
         enemyAtkStage = 0,
         enemySpAStage = 0,
-        enemyDexId = enemyDex,
+        enemyDexId = activeEnemyDex,
         enemyLevel = enemyLevel,
-        enemyCurrentHp = enemySnap.maxHp(),
-        enemyMaxHp = enemySnap.maxHp(),
+        enemyCurrentHp = activeMaxHp,
+        enemyMaxHp = activeMaxHp,
         enemyStatus = StatusCondition.HEALTHY,
         isBossEncounter = isBoss,
+        activeTrainerClass = enemyTrainer?.name ?: trainerArchetype?.className,
+        activeTrainerAiTactic = enemyTrainer?.aiTactic ?: trainerArchetype?.aiTactic,
+        activeTrainerGimmick = activeSlotGimmick,
+        activeTrainerDefeatQuote = enemyTrainer?.defeatQuote ?: trainerArchetype?.defeatQuote,
+        activeEnemyTrainer = enemyTrainer,
+        enemyPartyDexIds = if (enemyTrainer != null) enemyParty else emptyList(),
+        enemyPartyIndex = 0,
+        enemyPartyCurrentHpMap = if (enemyTrainer != null) initialCurHpMap else emptyMap(),
+        enemyPartyMaxHpMap = if (enemyTrainer != null) initialMaxHpMap else emptyMap(),
+        showTrainerVsBanner = enemyTrainer != null,
+        enemyTrainerPose = TrainerPose.CAPSULE_THROW,
         activeGimmick = BattleGimmickMode.NONE,
         activeDialoguePoi = null,
         showWarpGatePicker = false,
-        weather = chapter.weatherPreset,
+        weather = resolvedWeather,
         transitionPulseNonce = it.transitionPulseNonce + 1L,
-        battleLog = (listOf("$titlePrefix ${enemyEntity.name} (Lv.$enemyLevel) materialized in ${chapter.regionName}!") + it.battleLog).take(16),
+        battleLog = (introLogs + it.battleLog).take(16),
       )
+    }
+    if (_audioConsoleState.value.isBgmPlaying) {
+      playBgmTheme(battleTheme)
+    } else {
+      _audioConsoleState.update { it.copy(activeBgmTheme = battleTheme) }
+      syncDynamicAudioLayerForCurrentState()
     }
   }
 
@@ -1731,6 +2113,7 @@ class StudioViewModel(
         battleLog = (listOf("Go! ${newLead.name} (Lv.$newLevel) entered the Resonance field!") + it.battleLog).take(16),
       )
     }
+    syncDynamicAudioLayerForCurrentState()
   }
 
   /**
@@ -1769,6 +2152,7 @@ class StudioViewModel(
     fun currentEnemySnap(hp: Int, maxHp: Int) = StudioViewModelHelpers.buildCombatantFromEntity(
       entity = enemyEntity,
       level = gt.enemyLevel,
+      gimmick = gt.activeTrainerGimmick,
       status = gt.enemyStatus,
       stages = StatStages(atk = eAtkStage, spA = eSpAStage),
     ).copy(currentHpPercent = (hp * 100 / maxHp.coerceAtLeast(1)).coerceIn(1, 100))
@@ -1791,7 +2175,20 @@ class StudioViewModel(
       enemyEntity,
       StudioViewModelHelpers.parsePokemonType(enemyEntity.primaryType),
     )
-    val enemyMove = enemyMoves[gt.turnNumber % enemyMoves.size]
+    val enemyMove = when (gt.activeTrainerAiTactic) {
+      TrainerAiTactic.AGGRESSIVE_SWEEPER, TrainerAiTactic.GIMMICK_ACE -> {
+        enemyMoves.maxByOrNull { candidate ->
+          CanonBattleResolver.resolveTurn(
+            attacker = currentEnemySnap(enemyHp, gt.enemyMaxHp),
+            defender = currentPlayerSnap(playerHp, playerMaxHp),
+            move = candidate,
+            field = BattleTurnField(weather = gt.weather, terrain = gt.terrain),
+          ).maxDamage
+        } ?: enemyMoves.first()
+      }
+      TrainerAiTactic.STATUS_TACTICIAN -> enemyMoves[(gt.turnNumber + 1) % enemyMoves.size]
+      else -> enemyMoves[gt.turnNumber % enemyMoves.size]
+    }
 
     val field = BattleTurnField(
       weather = gt.weather,
@@ -1908,10 +2305,84 @@ class StudioViewModel(
 
     markAtlasSeenOrBattled(enemyEntity.dexNumber, seen = true, battled = true)
 
-    // Victory check
+    // Enemy faint -> Multi-Creature Trainer Next-Partner Send-Out OR Full Victory!
     if (enemyHp <= 0) {
+      val updatedEnemyHpMap = if (gt.enemyPartyDexIds.isNotEmpty()) {
+        gt.enemyPartyCurrentHpMap + (enemyEntity.dexNumber to 0)
+      } else {
+        gt.enemyPartyCurrentHpMap
+      }
+      val playerLeadType = StudioViewModelHelpers.parsePokemonType(playerEntity.primaryType)
+      val nextEnemyIdx = if (gt.enemyPartyDexIds.size > 1) {
+        TrainerBattleAiEngine.chooseNextConsciousIndex(
+          partyDexIds = gt.enemyPartyDexIds,
+          currentIndex = gt.enemyPartyIndex,
+          hpMap = updatedEnemyHpMap,
+          playerPrimaryType = playerLeadType,
+          resolveTypes = { dex ->
+            val e = findPokemonByDex(dex)
+            StudioViewModelHelpers.parsePokemonType(e.primaryType) to
+              e.secondaryType.takeIf { it.isNotBlank() }?.let { StudioViewModelHelpers.parsePokemonType(it) }
+          },
+        )
+      } else {
+        null
+      }
+
+      if (nextEnemyIdx != null) {
+        val nextDex = gt.enemyPartyDexIds[nextEnemyIdx]
+        val nextEnemyEntity = findPokemonByDex(nextDex)
+        val nextMaxHp = gt.enemyPartyMaxHpMap[nextDex] ?: StudioViewModelHelpers.buildCombatantFromEntity(
+          nextEnemyEntity, level = gt.enemyLevel,
+        ).maxHp()
+        val nextCurHp = (updatedEnemyHpMap[nextDex] ?: nextMaxHp).coerceIn(1, nextMaxHp)
+        val nextGimmick = TrainerBattleAiEngine.resolveGimmickForEnemySlot(
+          preferredGimmick = gt.activeEnemyTrainer?.preferredGimmick ?: gt.activeTrainerGimmick,
+          partyDexIds = gt.enemyPartyDexIds,
+          activeIndex = nextEnemyIdx,
+          hpMap = updatedEnemyHpMap,
+        )
+        audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+        playPokemonCry(nextEnemyEntity)
+        logs.add("Foe ${enemyEntity.name} fainted!")
+        gt.activeEnemyTrainer?.let { trainer ->
+          logs.add("${trainer.name}: \"${trainer.switchQuote}\"")
+        }
+        logs.add(
+          "${gt.activeTrainerClass ?: "Trainer"} sent out ${nextEnemyEntity.name} (Lv.${gt.enemyLevel})" +
+            if (nextGimmick != BattleGimmickMode.NONE) " with ${nextGimmick.displayName}!" else "!"
+        )
+        markAtlasSeenOrBattled(nextDex, seen = true, battled = false)
+        _gameTestState.update {
+          it.copy(
+            turnNumber = it.turnNumber + 1,
+            enemyDexId = nextDex,
+            enemyCurrentHp = nextCurHp,
+            enemyMaxHp = nextMaxHp,
+            enemyStatus = StatusCondition.HEALTHY,
+            enemyAtkStage = 0,
+            enemySpAStage = 0,
+            enemyPartyIndex = nextEnemyIdx,
+            enemyPartyCurrentHpMap = updatedEnemyHpMap,
+            activeTrainerGimmick = nextGimmick,
+            showTrainerVsBanner = false,
+            enemyTrainerPose = TrainerPose.CAPSULE_THROW,
+            partyCurrentHpMap = it.partyCurrentHpMap + (playerEntity.dexNumber to playerHp.coerceAtLeast(1)),
+            battleLog = (logs.reversed() + it.battleLog).take(16),
+            lastEventNonce = it.lastEventNonce + 1L,
+            lastHitSeverity = lastSeverity,
+            lastAttackerWasPlayer = true,
+          )
+        }
+        syncDynamicAudioLayerForCurrentState()
+        return
+      }
+
       audioEngine.playSfx(StudioSfxType.LEVEL_UP)
       logs.add("${enemyEntity.name} fainted! Victory in ${gt.turnNumber} turn(s)!")
+      if (!gt.activeTrainerDefeatQuote.isNullOrBlank()) {
+        logs.add("${gt.activeTrainerClass ?: "Trainer"}: \"${gt.activeTrainerDefeatQuote}\"")
+      }
       if (gt.isBossEncounter) {
         val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
         if (chapter != null) {
@@ -1926,6 +2397,17 @@ class StudioViewModel(
         it.copy(
           inBattle = false,
           enemyCurrentHp = 0,
+          activeTrainerClass = null,
+          activeTrainerAiTactic = null,
+          activeTrainerGimmick = BattleGimmickMode.NONE,
+          activeTrainerDefeatQuote = null,
+          activeEnemyTrainer = null,
+          enemyPartyDexIds = emptyList(),
+          enemyPartyIndex = 0,
+          enemyPartyCurrentHpMap = emptyMap(),
+          enemyPartyMaxHpMap = emptyMap(),
+          showTrainerVsBanner = false,
+          enemyTrainerPose = TrainerPose.BATTLE_IDLE,
           playerAtkStage = 0,
           playerSpAStage = 0,
           enemyAtkStage = 0,
@@ -1937,6 +2419,7 @@ class StudioViewModel(
           lastAttackerWasPlayer = true,
         )
       }
+      syncDynamicAudioLayerForCurrentState()
       return
     }
 
@@ -1993,6 +2476,51 @@ class StudioViewModel(
       }
     }
 
+    // Tactical Mid-Battle AI Switching for Multi-Creature Trainers when heavily disadvantaged
+    var finalEnemyDex = gt.enemyDexId
+    var finalEnemyHp = enemyHp
+    var finalEnemyMaxHp = gt.enemyMaxHp
+    var finalEnemyPartyIdx = gt.enemyPartyIndex
+    var finalEnemyPartyHpMap = if (gt.enemyPartyDexIds.isNotEmpty()) {
+      gt.enemyPartyCurrentHpMap + (enemyEntity.dexNumber to enemyHp)
+    } else {
+      gt.enemyPartyCurrentHpMap
+    }
+    var finalEnemyPose = TrainerPose.BATTLE_IDLE
+    if (stillInBattle && gt.enemyPartyDexIds.size > 1 && enemyHp > 0) {
+      val leadType = StudioViewModelHelpers.parsePokemonType(playerEntity.primaryType)
+      val tacticalSwitchIdx = TrainerBattleAiEngine.chooseTacticalMidBattleSwitchIndex(
+        tactic = gt.activeTrainerAiTactic,
+        partyDexIds = gt.enemyPartyDexIds,
+        currentIndex = gt.enemyPartyIndex,
+        hpMap = finalEnemyPartyHpMap,
+        turnNumber = gt.turnNumber,
+        playerPrimaryType = leadType,
+        resolveTypes = { dex ->
+          val e = findPokemonByDex(dex)
+          StudioViewModelHelpers.parsePokemonType(e.primaryType) to
+            e.secondaryType.takeIf { it.isNotBlank() }?.let { StudioViewModelHelpers.parsePokemonType(it) }
+        },
+      )
+      if (tacticalSwitchIdx != null) {
+        val swDex = gt.enemyPartyDexIds[tacticalSwitchIdx]
+        val swEntity = findPokemonByDex(swDex)
+        val swMax = gt.enemyPartyMaxHpMap[swDex] ?: StudioViewModelHelpers.buildCombatantFromEntity(
+          swEntity, level = gt.enemyLevel,
+        ).maxHp()
+        val swCur = (finalEnemyPartyHpMap[swDex] ?: swMax).coerceIn(1, swMax)
+        finalEnemyDex = swDex
+        finalEnemyHp = swCur
+        finalEnemyMaxHp = swMax
+        finalEnemyPartyIdx = tacticalSwitchIdx
+        finalEnemyPose = TrainerPose.CAPSULE_THROW
+        eAtkStage = 0
+        eSpAStage = 0
+        playPokemonCry(swEntity)
+        logs.add("${gt.activeTrainerClass ?: "Trainer"} tactically pivoted to ${swEntity.name}!")
+      }
+    }
+
     _gameTestState.update {
       it.copy(
         inBattle = stillInBattle,
@@ -2003,7 +2531,13 @@ class StudioViewModel(
         playerSpAStage = pSpAStage,
         enemyAtkStage = eAtkStage,
         enemySpAStage = eSpAStage,
-        enemyCurrentHp = enemyHp,
+        enemyDexId = finalEnemyDex,
+        enemyCurrentHp = finalEnemyHp,
+        enemyMaxHp = finalEnemyMaxHp,
+        enemyPartyIndex = finalEnemyPartyIdx,
+        enemyPartyCurrentHpMap = finalEnemyPartyHpMap,
+        showTrainerVsBanner = false,
+        enemyTrainerPose = finalEnemyPose,
         partyCurrentHpMap = updatedHpMap,
         battleLog = (logs.reversed() + it.battleLog).take(16),
         lastEventNonce = it.lastEventNonce + 1L,
@@ -2011,6 +2545,7 @@ class StudioViewModel(
         lastAttackerWasPlayer = lastAttackerWasPlayer,
       )
     }
+    syncDynamicAudioLayerForCurrentState()
   }
 
   fun throwPokeBall(ballItem: StudioItemEntity) {
@@ -2303,7 +2838,7 @@ class StudioViewModel(
           val curHp = gt.partyCurrentHpMap[lead.dexNumber] ?: leadMaxHp
           val scaledHp = CanonBattleResolver.scaleHpProportionally(curHp, leadMaxHp, evolvedMaxHp)
           markAtlasCaptured(targetDex)
-          audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+          audioEngine.playSfx(StudioSfxType.EVOLUTION_CHIME)
           playPokemonCry(evolved)
           _gameTestState.update {
             it.copy(
@@ -2323,7 +2858,7 @@ class StudioViewModel(
           val newMaxHp = StudioViewModelHelpers.buildCombatantFromEntity(
             lead, level = boostedLevel, gimmick = gt.activeGimmick, heldItemId = held,
           ).maxHp()
-          audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+          audioEngine.playSfx(StudioSfxType.EVOLUTION_CHIME)
           _gameTestState.update {
             it.copy(
               partyLevelMap = it.partyLevelMap + (lead.dexNumber to boostedLevel),
@@ -2366,7 +2901,8 @@ class StudioViewModel(
       tag == "KEY:COMPASS" -> {
         val camp = _campaignState.value
         val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == gt.activeRegionId }
-        val msg = "Prism Compass: ${camp.harmonicShardsCollected}/14 Shards collected • Active Region: ${chapter?.regionName ?: gt.activeRegionId} (${chapter?.keyLoreMilestone ?: "Sanctuary"})."
+        val totalRegions = MasterCanonTemplateCatalog.worldChapters.size
+        val msg = "Prism Compass: ${camp.harmonicShardsCollected}/$totalRegions Shards collected • Active Region: ${chapter?.regionName ?: gt.activeRegionId} (${chapter?.keyLoreMilestone ?: "Sanctuary"})."
         audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
         _gameTestState.update {
           it.copy(
@@ -2388,17 +2924,26 @@ class StudioViewModel(
         _statusBannerMessage.value = "${item.name}: ${item.description}"
       }
     }
+    syncDynamicAudioLayerForCurrentState()
   }
 
   fun fleeBattle() {
     audioEngine.playSfx(StudioSfxType.UI_CANCEL)
     val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == _gameTestState.value.activeRegionId }
-    if (_audioConsoleState.value.isBgmPlaying && chapter != null) {
-      playBgmTheme(BgmThemeId.fromId(chapter.defaultBgmThemeId))
-    }
     _gameTestState.update {
       it.copy(
         inBattle = false,
+        activeTrainerClass = null,
+        activeTrainerAiTactic = null,
+        activeTrainerGimmick = BattleGimmickMode.NONE,
+        activeTrainerDefeatQuote = null,
+        activeEnemyTrainer = null,
+        enemyPartyDexIds = emptyList(),
+        enemyPartyIndex = 0,
+        enemyPartyCurrentHpMap = emptyMap(),
+        enemyPartyMaxHpMap = emptyMap(),
+        showTrainerVsBanner = false,
+        enemyTrainerPose = TrainerPose.BATTLE_IDLE,
         activeGimmick = BattleGimmickMode.NONE,
         playerAtkStage = 0,
         playerSpAStage = 0,
@@ -2406,6 +2951,14 @@ class StudioViewModel(
         enemySpAStage = 0,
         battleLog = (listOf("Disengaged cleanly back to 16x16 overworld.") + it.battleLog).take(16),
       )
+    }
+    if (_audioConsoleState.value.isBgmPlaying && chapter != null) {
+      playBgmTheme(chapter.resolveBgmTheme())
+    } else {
+      if (chapter != null) {
+        _audioConsoleState.update { it.copy(activeBgmTheme = chapter.resolveBgmTheme()) }
+      }
+      syncDynamicAudioLayerForCurrentState()
     }
   }
 
@@ -2423,6 +2976,7 @@ class StudioViewModel(
         battleLog = (listOf("Prism Healing Plaza restored full HP & status for all ${gt.activePartyDexIds.size} partners!") + it.battleLog).take(16),
       )
     }
+    syncDynamicAudioLayerForCurrentState()
   }
 
   fun completeCampaignChapter(chapter: CanonRegionChapter) {
@@ -2431,7 +2985,7 @@ class StudioViewModel(
       _campaignState.value = updated
       audioEngine.playSfx(StudioSfxType.LEVEL_UP)
       persistCampaignStateToRoom()
-      _statusBannerMessage.value = "Completed ${chapter.regionName}! Harmonic Shards: ${updated.harmonicShardsCollected}/14."
+      _statusBannerMessage.value = "Completed ${chapter.regionName}! Harmonic Shards: ${updated.harmonicShardsCollected}/${MasterCanonTemplateCatalog.worldChapters.size}."
     }
   }
 
@@ -2594,12 +3148,12 @@ class StudioViewModel(
         val theme = when {
           resource.name.contains("Battle", ignoreCase = true) -> BgmThemeId.WILD_ENCOUNTER
           resource.name.contains("Champion", ignoreCase = true) || resource.name.contains("Silver", ignoreCase = true) -> BgmThemeId.CHAMPION_CONVERGENCE
-          resource.name.contains("Route", ignoreCase = true) -> BgmThemeId.KANTO_JOHTO_ROUTE
+          resource.name.contains("Route", ignoreCase = true) -> BgmThemeId.KANTO_SEVII_CHIPTUNE
           resource.name.contains("Lab", ignoreCase = true) || resource.name.contains("Town", ignoreCase = true) -> BgmThemeId.HARMONIC_LAB
           else -> BgmThemeId.PRISM_TITLE
         }
         playBgmTheme(theme)
-        _statusBannerMessage.value = "Streaming 44.1kHz Omni-Hardware BGM: ${theme.displayName}"
+        _statusBannerMessage.value = "Streaming 44.1kHz Omni-Hardware 64-Step BGM: ${theme.displayName}"
       }
 
       else -> {
@@ -2609,6 +3163,9 @@ class StudioViewModel(
             _statusBannerMessage.value = "Synthesized ${_selectedPokemon.value.name} Cry preview."
             return
           }
+          resource.name.contains("Alert", ignoreCase = true) || resource.name.contains("Trainer", ignoreCase = true) -> StudioSfxType.TRAINER_EYE_CONTACT
+          resource.name.contains("Warp", ignoreCase = true) || resource.name.contains("Door", ignoreCase = true) -> StudioSfxType.DOOR_WARP_SWOOSH
+          resource.name.contains("Evolve", ignoreCase = true) || resource.name.contains("Evolution", ignoreCase = true) -> StudioSfxType.EVOLUTION_CHIME
           resource.name.contains("Crit", ignoreCase = true) || resource.name.contains("Hit", ignoreCase = true) -> StudioSfxType.HIT_HEAVY_CRIT
           resource.name.contains("Ball", ignoreCase = true) -> StudioSfxType.POKEBALL_SHAKE
           resource.name.contains("Heal", ignoreCase = true) -> StudioSfxType.HEAL_CHIME
@@ -3011,7 +3568,7 @@ class StudioViewModel(
       applyProjectToEngine(created, announce = false)
       hasAutoLoadedInitialProject = true
       audioEngine.playSfx(StudioSfxType.LEVEL_UP)
-      _statusBannerMessage.value = "Provisioned '${created.title}' (14 Custom 16x16 Regions) to Local Room Vault!"
+      _statusBannerMessage.value = "Provisioned '${created.title}' (${MasterCanonTemplateCatalog.worldChapters.size} Custom 16x16 Regions) to Local Room Vault!"
     }
   }
 
@@ -3022,14 +3579,14 @@ class StudioViewModel(
         MasterCanonTemplateCatalog.createBaseProjectTemplate(),
         FanGameProject(
           title = "Pokémon Chrono Quartz",
-          regionName = "Aethelgard Sector",
+          regionName = "Aethelgard 22-Region Sector",
           synopsis = "Time-rifting RPG fusing GBC Hi-Color sprites, GBA Mode-7 sky islands, N64 Stadium lighting, and Switch HD-2D bloom.",
           consoleMatrixPreset = "Ultimate Target Style — All 156 Hardware",
           activeChipsCsv = MasterCanonTemplateCatalog.TEMPLATE_CHIPS_CSV,
           pixel3dBlendRatio = 68L,
           dexCount = 1025L,
-          mapCount = 14L,
-          versionTag = "v4.0.0-PRISM",
+          mapCount = 22L,
+          versionTag = "v5.0.0-PRISM",
         ),
       )
       var firstCreated: FanGameProject? = null

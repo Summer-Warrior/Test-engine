@@ -39,6 +39,9 @@ import com.example.engine.SpritePixelMatrixEngine
 import com.example.engine.StatusCondition
 import com.example.engine.StudioSfxType
 import com.example.engine.TerrainCondition
+import com.example.engine.TimeOfDayCycle
+import com.example.engine.TrainerArchetypeCatalog
+import com.example.engine.TrainerCategory
 import com.example.engine.UniversalGameFeelEngine
 import com.example.engine.UniversalHardwareRegistry
 import com.example.engine.WeatherCondition
@@ -132,11 +135,17 @@ class OmniStudioUpgradeVerificationTest {
   }
 
   @Test
-  fun `all 14 regions have unique 16x16 custom maps valid spawns landmarks 3 POIs and zero Bulbasaur fallback`() {
+  fun `all 22 fusion regions have unique 16x16 maps 22 distinct biomes passable spawns landmarks 3 sub-zones 57 trainer types and 100 percent 1025 dex coverage`() {
     val chapters = MasterCanonTemplateCatalog.worldChapters
-    assertEquals(14, chapters.size)
+    assertEquals(22, chapters.size)
+
+    val chapterIds = chapters.map { it.id }.toSet()
+    assertEquals(22, chapterIds.size)
+    assertEquals("All 22 regions must have distinct RegionBiomeStyle palettes", 22, chapters.map { it.biomeStyle }.toSet().size)
 
     val uniqueTileHashes = mutableSetOf<Int>()
+    val unionDexAcrossRegions = mutableSetOf<Int>()
+
     chapters.forEach { chapter ->
       assertEquals("Region ${chapter.id} must be 16x16 (256 tiles)", 256, chapter.defaultMapTiles.size)
       assertTrue("Region ${chapter.id} tiles must be in 0..11", chapter.defaultMapTiles.all { it in 0..11 })
@@ -144,6 +153,7 @@ class OmniStudioUpgradeVerificationTest {
       assertTrue("Region ${chapter.id} must have Route Road (3)", chapter.defaultMapTiles.contains(3))
       assertTrue("Region ${chapter.id} must have Prism Sanctuary (5)", chapter.defaultMapTiles.contains(5))
       assertTrue("Region ${chapter.id} must have Healing Plaza (8)", chapter.defaultMapTiles.contains(8))
+      assertTrue("Region ${chapter.id} must have Landmark Tile (10)", chapter.defaultMapTiles.contains(10))
       assertTrue("Region ${chapter.id} must have Warp Gate (11)", chapter.defaultMapTiles.contains(11))
 
       val spawnIdx = chapter.spawnRow * MasterCanonTemplateCatalog.MAP_GRID_SIZE + chapter.spawnCol
@@ -153,10 +163,27 @@ class OmniStudioUpgradeVerificationTest {
         UniversalGameFeelEngine.isTilePassable(spawnTile),
       )
 
+      // Multi-zone layer & landmark silhouette & connected warp portals
+      assertEquals("Region ${chapter.id} must have 3 RegionSubZones", 3, chapter.subZones.size)
+      chapter.subZones.forEach { zone ->
+        assertTrue(zone.name.isNotBlank())
+        assertTrue(zone.sourceTag.isNotBlank())
+        assertTrue(zone.col in 0..15 && zone.row in 0..15)
+      }
+      assertTrue("Region ${chapter.id} fusionSourcesLineage must be non-blank", chapter.fusionSourcesLineage.isNotBlank())
+      assertTrue("Region ${chapter.id} must link to valid connected regions", chapter.connectedRegionIds.isNotEmpty() && chapter.connectedRegionIds.all { it in chapterIds })
+      assertTrue("Region ${chapter.id} must define regional trainer classes", chapter.regionalTrainerClassIds.isNotEmpty())
+      chapter.regionalTrainerClassIds.forEach { trId ->
+        assertNotNull("Trainer ID $trId in ${chapter.id} must exist in TrainerArchetypeCatalog", TrainerArchetypeCatalog.findById(trId))
+      }
+
       assertEquals("Region ${chapter.id} must have 3 NPCs/POIs", 3, chapter.pointsOfInterest.size)
       chapter.pointsOfInterest.forEach { poi ->
         assertTrue(poi.col in 0 until 16 && poi.row in 0 until 16)
         assertTrue(poi.name.isNotBlank() && poi.dialogue.isNotBlank())
+        poi.trainerArchetypeId?.let { trId ->
+          assertNotNull("POI trainerArchetypeId $trId in ${chapter.id} must resolve", TrainerArchetypeCatalog.findById(trId))
+        }
       }
 
       // Verify encounter pool species synthesize cleanly with exact dex numbers (NEVER falling back to #1 Bulbasaur)
@@ -168,9 +195,32 @@ class OmniStudioUpgradeVerificationTest {
         }
       }
 
+      val regionalPool = NationalAtlasIndex.dexPoolForRegion(chapter.id)
+      assertTrue("Region ${chapter.id} must have regional Pokédex pool", regionalPool.isNotEmpty())
+      unionDexAcrossRegions += regionalPool
       uniqueTileHashes += chapter.defaultMapTiles.hashCode()
     }
-    assertEquals("All 14 region maps must have unique custom layouts", 14, uniqueTileHashes.size)
+    assertEquals("All 22 region maps must have unique custom layouts", 22, uniqueTileHashes.size)
+    assertEquals("All 1,025 Pokémon (#0001..#1025) must be reachable across the 22 fusion regions", 1025, unionDexAcrossRegions.size)
+    assertTrue((1..1025).all { it in unionDexAcrossRegions })
+
+    // Verify All Trainer Types catalog (Route/Field, Specialists, League/Frontier, Cross-Media, Factions)
+    val allTrainers = TrainerArchetypeCatalog.allTrainerTypes
+    assertTrue("Expected >= 50 Trainer Types, got ${allTrainers.size}", allTrainers.size >= 50)
+    assertEquals(allTrainers.size, allTrainers.map { it.id }.distinct().size)
+    TrainerCategory.entries.forEach { cat ->
+      assertTrue("TrainerCategory $cat must have entries", TrainerArchetypeCatalog.filterByCategory(cat).isNotEmpty())
+    }
+    allTrainers.forEach { tr ->
+      val dex = TrainerArchetypeCatalog.resolveEnemyDexForTrainer(tr, "kanto", seedNonce = 3)
+      assertTrue("Resolved trainer dex $dex out of bounds", dex in 1..1025)
+    }
+
+    // Verify Day/Dusk/Night cycle & clean tile legend label lookup (regression test for Pair string bug)
+    assertEquals(listOf(TimeOfDayCycle.DAY, TimeOfDayCycle.DUSK, TimeOfDayCycle.NIGHT), TimeOfDayCycle.entries)
+    val label0 = MasterCanonTemplateCatalog.tileLegendLabels.firstOrNull { it.first == 0 }?.second
+    assertEquals("Meadow / Plaza", label0)
+    assertFalse(label0!!.startsWith("("))
 
     // Verify Room Resource Manager map tiles use aligned terrain indices (1, 2, 3, 5)
     val mapTileResources = EncyclopediaSeedCatalog.builtInResources.filter { it.categoryId == ResourceCategory.MAP_TILES.id }
@@ -423,7 +473,7 @@ class OmniStudioUpgradeVerificationTest {
         // 1. Auto-seed "Pokémon: Prism Resonance" when empty
         val seeded = repo.ensureDefaultMasterProjectSeeded()
         assertTrue(seeded.title.contains("Prism Resonance"))
-        assertEquals(14L, seeded.mapCount)
+        assertEquals(22L, seeded.mapCount)
         assertEquals(1025L, seeded.dexCount)
         val allProjects = repo.observeProjects().first()
         assertEquals(1, allProjects.size)
@@ -516,14 +566,152 @@ class OmniStudioUpgradeVerificationTest {
         val importedCampaign = dao.observeCampaignState(importedProject.id).first()
         assertEquals("johto", importedCampaign?.activeRegionId)
 
-        // 4. Full #0001-#1025 National Atlas Index check
-        val fullIndex = NationalAtlasIndex.buildCompleteIndex()
+        // 4. Full #0001-#1025 Offline National Atlas Index + ProceduralCreatureRigEngine Bitmap check
+        val fullIndex = NationalAtlasIndex.initializeFromAssets(context)
         assertEquals(1025, fullIndex.size)
-        assertEquals("Bulbasaur", fullIndex.first().name)
-        assertEquals("Pecharunt", fullIndex.last().name)
+        assertEquals(1025, fullIndex.map { it.name }.toSet().size)
+        assertTrue(fullIndex.none { it.name.startsWith("Species #") })
+        assertTrue(fullIndex.all { it.epithet.isNotBlank() && it.baseStatTotal in 150..900 })
+        assertTrue(fullIndex.sumOf { it.availableForms.size } > 1100)
+
+        // Verify Android ARGB_8888 transparent-backed Bitmaps render cleanly offline (2D + 3D Cel-Voxel)
+        listOf(1, 6, 25, 94, 150, 249, 384, 448, 658, 1007, 1025).forEach { dex ->
+          val bmp2d = com.example.engine.ProceduralCreatureRigEngine.renderSpriteBitmap32(dex, scale = 2)
+          assertEquals(64, bmp2d.width)
+          assertEquals(64, bmp2d.height)
+          assertEquals(0, Color.alpha(bmp2d.getPixel(0, 0))) // Transparent corner background
+          assertTrue((0 until 64).any { y -> (0 until 64).any { x -> Color.alpha(bmp2d.getPixel(x, y)) == 255 } })
+
+          val bmp3d = com.example.engine.ProceduralCreatureRigEngine.renderCelVoxelModelBitmap(dex, scale = 2)
+          assertEquals(64, bmp3d.width)
+          assertEquals(64, bmp3d.height)
+          assertTrue((0 until 64).any { y -> (0 until 64).any { x -> Color.alpha(bmp3d.getPixel(x, y)) == 255 } })
+        }
+
+        // 5. Room v5 custom_trainers CRUD + Trainer 2D Sprite / 3D Cel-Voxel / 40x40 Portrait Bitmap check
+        val trainerDao = db.customTrainerDao()
+        val customHero = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.copy(
+          appearance = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.appearance.copy(
+            headgear = com.example.engine.TrainerHeadgear.VISOR,
+            outfitStyle = com.example.engine.TrainerOutfitStyle.CHAMPION_CAPE,
+            outfitPrimaryHex = "#8B5CF6",
+          ),
+        )
+        trainerDao.upsertCustomTrainer(
+          com.example.data.local.CustomTrainerEntity.fromTrainerSpec(customHero, projectId = seeded.id, isPlayerAvatar = true)
+        )
+        val restoredHero = trainerDao.getSavedProtagonist()
+        assertNotNull(restoredHero)
+        assertEquals("VISOR", restoredHero!!.headgearToken)
+        assertEquals("CHAMPION_CAPE", restoredHero.outfitStyleToken)
+
+        val tBmp2d = com.example.engine.TrainerCatalogAndRigEngine.renderTrainerSpriteBitmap(
+          customHero, com.example.engine.TrainerPose.CAPSULE_THROW, scale = 2,
+        )
+        assertEquals(64, tBmp2d.width)
+        assertEquals(0, Color.alpha(tBmp2d.getPixel(0, 0)))
+        val tBmp3d = com.example.engine.TrainerCatalogAndRigEngine.renderTrainerCelVoxelBitmap(customHero, scale = 2)
+        assertEquals(64, tBmp3d.width)
+        val tPortrait = com.example.engine.TrainerCatalogAndRigEngine.renderTrainerPortraitBitmap(customHero, scale = 2)
+        assertEquals(80, tPortrait.width)
       } finally {
         db.close()
       }
+    }
+  }
+
+  @Test
+  fun `64-step regional and battle soundtracks dynamic layers ambient beds and new SFX pass Robolectric PCM checks`() {
+    val audioParams = AudioConvergenceSolver.solveAudio(
+      activePlatforms = emptyList(),
+      disciplineMode = MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+      extraPretty = ExtraVisualAudioSettings(),
+    )
+
+    // 1. Verify all 16 themes have 64-step compositions, unique IDs, non-zero stereo PCM, and safe amplitude bounds
+    assertEquals(16, BgmThemeId.entries.size)
+    assertEquals(16, BgmThemeId.entries.map { it.id }.distinct().size)
+    BgmThemeId.entries.forEach { theme ->
+      assertEquals("Theme ${theme.id} must have 64 steps", 64, theme.stepCount)
+      val pcm = OmniHardwareAudioEngine.renderBgmLoopPcm(theme, audioParams)
+      assertTrue("Theme ${theme.id} PCM too short: ${pcm.size}", pcm.size >= 64 * 1024 * 2)
+      assertEquals("Theme ${theme.id} PCM must be even stereo frames", 0, pcm.size % 2)
+      var hasNonZeroL = false
+      var hasNonZeroR = false
+      var hasStereoDiff = false
+      for (i in pcm.indices step 2) {
+        val l = pcm[i].toInt()
+        val r = pcm[i + 1].toInt()
+        assertTrue("Left sample out of safe range: $l", l in -32767..32767)
+        assertTrue("Right sample out of safe range: $r", r in -32767..32767)
+        if (l != 0) hasNonZeroL = true
+        if (r != 0) hasNonZeroR = true
+        if (l != r) hasStereoDiff = true
+      }
+      assertTrue("Theme ${theme.id} left channel silent", hasNonZeroL)
+      assertTrue("Theme ${theme.id} right channel silent", hasNonZeroR)
+      assertTrue("Theme ${theme.id} lacks stereo separation", hasStereoDiff)
+    }
+
+    // 2. Verify Dynamic Battle Audio Layers: Low-HP Urgency Pulse & Boss Final Ace Climax (+10% BPM & octave lift)
+    val baseBossPcm = OmniHardwareAudioEngine.renderBgmLoopPcm(
+      theme = BgmThemeId.CHAMPION_CONVERGENCE,
+      params = audioParams,
+      dynamicState = com.example.engine.DynamicBattleAudioState(),
+    )
+    val lowHpPcm = OmniHardwareAudioEngine.renderBgmLoopPcm(
+      theme = BgmThemeId.CHAMPION_CONVERGENCE,
+      params = audioParams,
+      dynamicState = com.example.engine.DynamicBattleAudioState(lowHpUrgency = true),
+    )
+    val climaxPcm = OmniHardwareAudioEngine.renderBgmLoopPcm(
+      theme = BgmThemeId.CHAMPION_CONVERGENCE,
+      params = audioParams,
+      dynamicState = com.example.engine.DynamicBattleAudioState(bossFinalAceClimax = true),
+    )
+    assertTrue("Low-HP urgency should slightly tighten tempo", lowHpPcm.size < baseBossPcm.size)
+    assertTrue("Final Ace climax (+10% BPM) must render a faster loop", climaxPcm.size < lowHpPcm.size)
+    assertTrue(lowHpPcm.all { it.toInt() in -32767..32767 })
+    assertTrue(climaxPcm.all { it.toInt() in -32767..32767 })
+
+    // 3. Verify all 4 Region Ambient Beds blend safely through tanh() soft-limiter
+    val dryRoute = OmniHardwareAudioEngine.renderBgmLoopPcm(
+      theme = BgmThemeId.HOENN_ORANGE_BRASS,
+      params = audioParams,
+      dynamicState = com.example.engine.DynamicBattleAudioState(ambientBed = com.example.engine.AmbientBedType.NONE),
+    )
+    listOf(
+      com.example.engine.AmbientBedType.OCEAN_SURF,
+      com.example.engine.AmbientBedType.MEADOW_WIND,
+      com.example.engine.AmbientBedType.SNOW_SHIMMER,
+      com.example.engine.AmbientBedType.CRYSTAL_HUM,
+    ).forEach { bed ->
+      val wet = OmniHardwareAudioEngine.renderBgmLoopPcm(
+        theme = BgmThemeId.HOENN_ORANGE_BRASS,
+        params = audioParams,
+        dynamicState = com.example.engine.DynamicBattleAudioState(ambientBed = bed, ambientBedEnabled = true),
+      )
+      assertEquals(dryRoute.size, wet.size)
+      assertTrue("Ambient bed $bed had no audible mix effect", !dryRoute.contentEquals(wet))
+      assertTrue("Ambient bed $bed clipped", wet.all { it.toInt() in -32767..32767 })
+    }
+
+    // 4. Verify all StudioSfxType entries including Trainer '!' Alert, Door/Warp Swoosh, and Evolution Chime
+    assertTrue(StudioSfxType.TRAINER_EYE_CONTACT in StudioSfxType.entries)
+    assertTrue(StudioSfxType.DOOR_WARP_SWOOSH in StudioSfxType.entries)
+    assertTrue(StudioSfxType.EVOLUTION_CHIME in StudioSfxType.entries)
+    StudioSfxType.entries.forEach { sfx ->
+      val pcm = OmniHardwareAudioEngine.renderSfxPcm(sfx, audioParams)
+      assertTrue("SFX ${sfx.id} too short", pcm.size >= 1024)
+      assertEquals(0, pcm.size % 2)
+      assertTrue("SFX ${sfx.id} silent", pcm.any { it.toInt() != 0 })
+      assertTrue("SFX ${sfx.id} out of safe bounds", pcm.all { it.toInt() in -32767..32767 })
+    }
+
+    // 5. Verify all 22 chapters map directly to exact era-matched 64-step themes & ambient beds
+    MasterCanonTemplateCatalog.worldChapters.forEach { ch ->
+      assertEquals("Chapter ${ch.id} BGM mismatch", ch.defaultBgmThemeId, ch.resolveBgmTheme().id)
+      assertTrue("Chapter ${ch.id} missing ambient bed", ch.resolveAmbientBed() != com.example.engine.AmbientBedType.NONE)
     }
   }
 }

@@ -29,6 +29,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.engine.ConvergedVisualParams
 import com.example.engine.MasterCanonTemplateCatalog
+import com.example.engine.TimeOfDayCycle
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
 import com.example.ui.theme.Mode7Sky
@@ -52,8 +57,9 @@ import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
 
 /**
- * Interactive 16x16 Seamless Auto-Tiled HD-2D Map Composer across all 14 custom source-inspired regions.
- * Supports all 12 terrain/landmark brushes, drag-to-paint strokes, and Room SQLite auto-saving.
+ * Interactive 16x16 Seamless Auto-Tiled HD-2D Map Composer across all 22 custom source-inspired fusion regions.
+ * Supports all 12 terrain/landmark brushes, signature regional silhouettes, Day/Dusk/Night lighting,
+ * 22-Region World Atlas overview, drag-to-paint strokes, and Room SQLite auto-saving.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -62,15 +68,19 @@ fun WorldMapAndChipLabSection(
   mapGrid: List<Int>,
   selectedBrush: Int,
   convergedVisuals: ConvergedVisualParams,
+  timeOfDay: TimeOfDayCycle = TimeOfDayCycle.DAY,
+  completedRegionIds: Set<String> = emptySet(),
   onSelectRegion: (String) -> Unit,
   onSelectBrush: (Int) -> Unit,
   onPaintTile: (Int) -> Unit,
+  onSelectTimeOfDay: (TimeOfDayCycle) -> Unit = {},
   onResetRegionMap: () -> Unit,
   onPinMapAsset: () -> Unit,
 ) {
   val activeChapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == activeRegionId }
     ?: MasterCanonTemplateCatalog.worldChapters.first()
   val regionAccent = parseHexColorSafe(activeChapter.regionAccentHex, CyberCyan)
+  var showAllRegionsAtlas by remember { mutableStateOf(false) }
 
   val brushes = listOf(
     0 to ("0: Meadow" to SgbEmerald),
@@ -87,125 +97,182 @@ fun WorldMapAndChipLabSection(
     11 to ("11: Warp Gate" to VoxelViolet),
   )
 
-  Card(
-    modifier = Modifier
-      .fillMaxWidth()
-      .border(1.dp, StudioBorderDark, RoundedCornerShape(18.dp)),
-    shape = RoundedCornerShape(18.dp),
-    colors = CardDefaults.cardColors(containerColor = StudioCardDark),
-  ) {
-    Column(
-      modifier = Modifier.padding(14.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
+  Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    if (showAllRegionsAtlas) {
+      FullRegionsWorldAtlasCanvas(
+        activeRegionId = activeChapter.id,
+        completedRegionIds = completedRegionIds,
+        timeOfDay = timeOfDay,
+        onSelectRegion = { id ->
+          onSelectRegion(id)
+          showAllRegionsAtlas = false
+        },
+      )
+    }
+
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .border(1.dp, StudioBorderDark, RoundedCornerShape(18.dp)),
+      shape = RoundedCornerShape(18.dp),
+      colors = CardDefaults.cardColors(containerColor = StudioCardDark),
     ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+      Column(
+        modifier = Modifier.padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "16×16 AUTO-TILED HD-2D MAP COMPOSER • ${activeChapter.biomeStyle.label.uppercase()}",
-            style = MaterialTheme.typography.labelSmall,
-            color = CyberCyan,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = activeChapter.regionName,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = StudioTextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "16×16 AUTO-TILED HD-2D MAP COMPOSER • ${activeChapter.biomeStyle.label.uppercase()}",
+              style = MaterialTheme.typography.labelSmall,
+              color = CyberCyan,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+              text = activeChapter.regionName,
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = StudioTextPrimary,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+              text = "${activeChapter.landmarkSilhouette.label} • ${activeChapter.fusionSourcesLineage}",
+              style = MaterialTheme.typography.labelSmall,
+              color = StudioTextSecondary,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+
+          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(
+              onClick = onResetRegionMap,
+              modifier = Modifier.testTag("reset_region_map_button"),
+            ) {
+              Icon(Icons.Default.RestartAlt, contentDescription = "Reset Region Map", modifier = Modifier.size(16.dp), tint = SuperFxGold)
+            }
+            OutlinedButton(
+              onClick = onPinMapAsset,
+              modifier = Modifier.testTag("pin_map_to_sidebar_button"),
+            ) {
+              Text("Pin Map", color = CyberCyan)
+            }
+          }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          OutlinedButton(
-            onClick = onResetRegionMap,
-            modifier = Modifier.testTag("reset_region_map_button"),
-          ) {
-            Icon(Icons.Default.RestartAlt, contentDescription = "Reset Region Map", modifier = Modifier.size(16.dp), tint = SuperFxGold)
+        // Day/Dusk/Night Lighting + Full 22-Region Atlas Switch
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          TimeOfDayCycle.entries.forEach { cycle ->
+            FilterChip(
+              selected = timeOfDay == cycle,
+              onClick = { onSelectTimeOfDay(cycle) },
+              label = { Text(cycle.label, style = MaterialTheme.typography.labelSmall) },
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = SuperFxGold.copy(alpha = 0.22f),
+                selectedLabelColor = SuperFxGold,
+              ),
+              modifier = Modifier.testTag("map_time_of_day_${cycle.id}"),
+            )
           }
-          OutlinedButton(
-            onClick = onPinMapAsset,
-            modifier = Modifier.testTag("pin_map_to_sidebar_button"),
-          ) {
-            Text("Pin Map", color = CyberCyan)
-          }
-        }
-      }
-
-      // 14-Region Selector Strip
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        MasterCanonTemplateCatalog.worldChapters.forEach { chapter ->
-          val selected = chapter.id == activeChapter.id
           FilterChip(
-            selected = selected,
-            onClick = { onSelectRegion(chapter.id) },
-            label = {
-              Text(
-                text = chapter.regionName.substringBefore(" —"),
-                style = MaterialTheme.typography.labelSmall,
-              )
-            },
+            selected = showAllRegionsAtlas,
+            onClick = { showAllRegionsAtlas = !showAllRegionsAtlas },
+            label = { Text("View All 22 Drawn Regions", style = MaterialTheme.typography.labelSmall) },
             colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = CyberCyan.copy(alpha = 0.22f),
-              selectedLabelColor = CyberCyan,
+              selectedContainerColor = VoxelViolet.copy(alpha = 0.25f),
+              selectedLabelColor = VoxelViolet,
             ),
-            modifier = Modifier.testTag("map_region_chip_${chapter.id}"),
+            modifier = Modifier.testTag("map_toggle_all_22_atlas"),
           )
         }
-      }
 
-      // All 12 Terrain & Landmark Brushes (scrollable horizontal palette or FlowRow)
-      FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        brushes.forEach { (id, pair) ->
-          BrushChip(
-            tileType = id,
-            label = pair.first,
-            color = pair.second,
-            selected = selectedBrush == id,
-            onClick = { onSelectBrush(id) },
-          )
+        // 22-Region Selector Strip
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          MasterCanonTemplateCatalog.worldChapters.forEach { chapter ->
+            val selected = chapter.id == activeChapter.id
+            FilterChip(
+              selected = selected,
+              onClick = { onSelectRegion(chapter.id) },
+              label = {
+                Text(
+                  text = chapter.regionName.substringAfter(". ").substringBefore(" —"),
+                  style = MaterialTheme.typography.labelSmall,
+                )
+              },
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = CyberCyan.copy(alpha = 0.22f),
+                selectedLabelColor = CyberCyan,
+              ),
+              modifier = Modifier.testTag("map_region_chip_${chapter.id}"),
+            )
+          }
         }
+
+        // All 12 Terrain & Landmark Brushes
+        FlowRow(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          brushes.forEach { (id, pair) ->
+            BrushChip(
+              tileType = id,
+              label = pair.first,
+              color = pair.second,
+              selected = selectedBrush == id,
+              onClick = { onSelectBrush(id) },
+            )
+          }
+        }
+
+        // Full 16x16 Drag-to-Paint AutoTileMapCanvas with Landmark Silhouettes, Sub-Zones & Time-of-Day
+        AutoTileMapCanvas(
+          tiles = mapGrid,
+          gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE,
+          viewportSize = null,
+          biomeStyle = activeChapter.biomeStyle,
+          landmarkSilhouette = activeChapter.landmarkSilhouette,
+          timeOfDay = timeOfDay,
+          subZones = activeChapter.subZones,
+          showSubZoneLabels = true,
+          pointsOfInterest = activeChapter.pointsOfInterest,
+          visuals = convergedVisuals,
+          waterCausticsEnabled = convergedVisuals.waterCausticsEnabled,
+          weatherParticlesEnabled = convergedVisuals.weatherParticlesEnabled,
+          volumetricRaysEnabled = convergedVisuals.volumetricRaysEnabled,
+          weather = activeChapter.weatherPreset,
+          regionAccentColor = regionAccent,
+          showGridOverlay = true,
+          showMinimap = false,
+          enableDragPaint = true,
+          onTileTappedOrPainted = onPaintTile,
+          testTagPrefix = "world_map_editor_canvas",
+        )
+
+        Text(
+          text = "Full 16×16 (256-tile) multi-source fusion map • ${activeChapter.subZones.size} Sub-Zones (${activeChapter.subZones.joinToString(", ") { it.name }}) • ${activeChapter.pointsOfInterest.size} interactive NPCs/POIs. Drag or tap to paint; edits auto-save to Room!",
+          style = MaterialTheme.typography.bodySmall,
+          color = StudioTextSecondary,
+        )
       }
-
-      // Full 16x16 Drag-to-Paint AutoTileMapCanvas
-      AutoTileMapCanvas(
-        tiles = mapGrid,
-        gridSize = MasterCanonTemplateCatalog.MAP_GRID_SIZE,
-        viewportSize = null,
-        biomeStyle = activeChapter.biomeStyle,
-        pointsOfInterest = activeChapter.pointsOfInterest,
-        waterCausticsEnabled = convergedVisuals.waterCausticsEnabled,
-        weatherParticlesEnabled = convergedVisuals.weatherParticlesEnabled,
-        volumetricRaysEnabled = convergedVisuals.volumetricRaysEnabled,
-        weather = activeChapter.weatherPreset,
-        regionAccentColor = regionAccent,
-        showGridOverlay = true,
-        showMinimap = false,
-        enableDragPaint = true,
-        onTileTappedOrPainted = onPaintTile,
-        testTagPrefix = "world_map_editor_canvas",
-      )
-
-      Text(
-        text = "Full 16×16 (256-tile) custom source-inspired map with ${activeChapter.pointsOfInterest.size} interactive NPCs/POIs. Drag or tap to paint; edits auto-save to Room and stream live into Game Test!",
-        style = MaterialTheme.typography.bodySmall,
-        color = StudioTextSecondary,
-      )
     }
   }
 }

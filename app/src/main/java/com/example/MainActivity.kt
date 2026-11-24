@@ -149,6 +149,7 @@ fun PokeFusionRootApp() {
             localDb.encyclopediaDao(),
           ),
           persistenceDao = localDb.studioPersistenceDao(),
+          customTrainerDao = localDb.customTrainerDao(),
         )
       }
     },
@@ -173,6 +174,10 @@ fun PokeFusionStudioWorkspace(
   val dexSearchQuery by viewModel.dexSearchQuery.collectAsStateWithLifecycle()
   val selectedGenFilter by viewModel.selectedGenerationFilter.collectAsStateWithLifecycle()
   val isSyncingPokeApi by viewModel.isSyncingPokeApi.collectAsStateWithLifecycle()
+  val playerTrainer by viewModel.playerTrainer.collectAsStateWithLifecycle()
+  val selectedViewportTrainer by viewModel.selectedViewportTrainer.collectAsStateWithLifecycle()
+  val viewportInspectsTrainer by viewModel.viewportInspectsTrainer.collectAsStateWithLifecycle()
+  val customTrainers by viewModel.customTrainers.collectAsStateWithLifecycle()
   val statusBanner by viewModel.statusBannerMessage.collectAsStateWithLifecycle()
 
   val cloudFanGamesState by viewModel.cloudFanGamesState.collectAsStateWithLifecycle()
@@ -338,6 +343,12 @@ fun PokeFusionStudioWorkspace(
             viewModel.selectWorkspaceTab(StudioWorkspaceTab.SPRITE_EDITOR)
             if (compactMode) scope.launch { drawerState.close() }
           },
+          customTrainers = customTrainers,
+          onSelectTrainer = { trainerSpec ->
+            viewModel.selectTrainerForViewport(trainerSpec, openViewportTab = true)
+            if (compactMode) scope.launch { drawerState.close() }
+          },
+          onDeleteCustomTrainer = { id -> viewModel.deleteCustomTrainerFromRoom(id) },
           isCompactDrawerMode = compactMode,
         )
       }
@@ -390,7 +401,7 @@ fun PokeFusionStudioWorkspace(
                       overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                      text = "${hardwareState.convergedVisuals.activeCount}/${hardwareState.allPlatforms.size} HW • ${syncStatus.statusLabel} • Offline Room v4",
+                      text = "${hardwareState.convergedVisuals.activeCount}/${hardwareState.allPlatforms.size} HW • ${syncStatus.statusLabel} • Offline Room v5",
                       style = MaterialTheme.typography.labelSmall,
                       color = StudioTextSecondary,
                       maxLines = 1,
@@ -558,6 +569,13 @@ fun PokeFusionStudioWorkspace(
                       category = category,
                     )
                   },
+                  inspectTrainerMode = viewportInspectsTrainer,
+                  selectedTrainer = selectedViewportTrainer,
+                  playerTrainer = playerTrainer,
+                  onToggleInspectTrainerMode = { viewModel.toggleViewportTrainerMode(it) },
+                  onSelectViewportTrainer = { viewModel.selectTrainerForViewport(it) },
+                  onUpdateProtagonistAppearance = { transform -> viewModel.updateProtagonistAppearance(transform) },
+                  onSaveCustomTrainer = { spec -> viewModel.saveCustomTrainerToRoom(spec) },
                 )
               }
 
@@ -660,6 +678,19 @@ fun PokeFusionStudioWorkspace(
                   onToggleMute = { viewModel.toggleAudioMute() },
                   onSetVolume = { viewModel.setAudioMasterVolume(it) },
                   onPlayLeadCry = { viewModel.playPokemonCry(it) },
+                  onSelectTimeOfDay = { viewModel.setTimeOfDayCycle(it) },
+                  onToggleFullRegionView = { viewModel.toggleFullRegionView() },
+                  onToggleWorldAtlas = { viewModel.toggleWorldAtlas() },
+                  onToggleSubZoneLabels = { viewModel.toggleSubZoneLabels() },
+                  onChallengeTrainer = { viewModel.challengeTrainerArchetype(it) },
+                  onSummonWildPokemon = { viewModel.summonWildPokemonByDex(it) },
+                  onAddPokemonToParty = { viewModel.addPokemonToActiveParty(it) },
+                  playerTrainer = playerTrainer,
+                  onDismissVsBanner = { viewModel.dismissTrainerVsBanner() },
+                  onToggleTrailingPartner = { viewModel.toggleTrailingPartner() },
+                  onOpenTrainerStudio = { viewModel.openHeroCustomizerInViewport() },
+                  onToggleAmbientBed = { viewModel.toggleAmbientBed() },
+                  onPlaySfx = { viewModel.playSfx(it) },
                 )
               }
 
@@ -779,9 +810,12 @@ fun PokeFusionStudioWorkspace(
                   mapGrid = mapGrid,
                   selectedBrush = selectedBrush,
                   convergedVisuals = hardwareState.convergedVisuals,
+                  timeOfDay = gameTestState.timeOfDay,
+                  completedRegionIds = campaignState.completedChapterIds,
                   onSelectRegion = { viewModel.selectMapRegion(it) },
                   onSelectBrush = { viewModel.selectMapBrush(it) },
                   onPaintTile = { viewModel.paintMapTile(it) },
+                  onSelectTimeOfDay = { viewModel.setTimeOfDayCycle(it) },
                   onResetRegionMap = { viewModel.resetActiveRegionMapToDefault() },
                   onPinMapAsset = {
                     viewModel.saveCurrentFusionAsSidebarAsset(

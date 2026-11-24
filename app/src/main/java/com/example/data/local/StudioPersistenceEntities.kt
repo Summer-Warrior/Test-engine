@@ -9,6 +9,14 @@ import androidx.room.Query
 import com.example.data.model.CustomDexEntry
 import com.example.data.model.CustomStudioAsset
 import com.example.data.model.FanGameProject
+import com.example.engine.BattleGimmickMode
+import com.example.engine.TrainerAiTactic
+import com.example.engine.TrainerAppearanceConfig
+import com.example.engine.TrainerCharacterSpec
+import com.example.engine.TrainerHeadgear
+import com.example.engine.TrainerOutfitStyle
+import com.example.engine.TrainerRoleCategory
+import com.example.engine.WeatherCondition
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "fan_game_projects")
@@ -264,6 +272,111 @@ data class CampaignStateEntity(
   val partyLevelsCsv: String = "25:50,6:50,94:50,448:50,658:50,384:50",
   val taughtMovesCsv: String = "",
 )
+
+@Entity(tableName = "custom_trainers")
+data class CustomTrainerEntity(
+  @PrimaryKey val id: String,
+  val projectId: String = "",
+  val name: String,
+  val title: String,
+  val roleCategory: String = TrainerRoleCategory.PROTAGONIST.name,
+  val regionId: String = "kanto",
+  val skinHex: String = "#F6C8A5",
+  val hairHex: String = "#1E293B",
+  val outfitPrimaryHex: String = "#EF4444",
+  val outfitSecondaryHex: String = "#F8FAFC",
+  val accentHex: String = "#06B6D4",
+  val headgearToken: String = TrainerHeadgear.CAP.name,
+  val outfitStyleToken: String = TrainerOutfitStyle.ADVENTURER_JACKET.name,
+  val hairStyleIndex: Int = 0,
+  val companionPoseIndex: Int = 0,
+  val teamDexIdsCsv: String = "25,6,94,448,658,384",
+  val introQuote: String = "Our Prism Resonance is ready!",
+  val defeatQuote: String = "What an unforgettable match!",
+  val isPlayerAvatar: Boolean = false,
+  val updatedAtEpochMs: Long = System.currentTimeMillis(),
+) {
+  fun toTrainerSpec(): TrainerCharacterSpec {
+    val team = teamDexIdsCsv.split(",").mapNotNull { it.trim().toIntOrNull() }.ifEmpty { listOf(25, 6, 94) }
+    val role = TrainerRoleCategory.entries.firstOrNull { it.name == roleCategory } ?: TrainerRoleCategory.PROTAGONIST
+    val headgear = TrainerHeadgear.entries.firstOrNull { it.name == headgearToken } ?: TrainerHeadgear.CAP
+    val outfit = TrainerOutfitStyle.entries.firstOrNull { it.name == outfitStyleToken } ?: TrainerOutfitStyle.ADVENTURER_JACKET
+    return TrainerCharacterSpec(
+      id = id,
+      name = name,
+      title = title,
+      roleCategory = role,
+      regionId = regionId,
+      sourceInspiration = if (isPlayerAvatar) "Custom Protagonist" else "Custom Studio Trainer",
+      teamDexIds = team,
+      aiTactic = TrainerAiTactic.STATUS_TACTICIAN,
+      preferredGimmick = BattleGimmickMode.TERASTALLIZATION,
+      preferredWeather = WeatherCondition.CLEAR,
+      introQuote = introQuote,
+      switchQuote = "$name: Switching partners to keep control!",
+      defeatQuote = defeatQuote,
+      dialogueLines = listOf(introQuote),
+      appearance = TrainerAppearanceConfig(
+        skinHex = skinHex,
+        hairHex = hairHex,
+        outfitPrimaryHex = outfitPrimaryHex,
+        outfitSecondaryHex = outfitSecondaryHex,
+        accentHex = accentHex,
+        headgear = headgear,
+        outfitStyle = outfit,
+        hairStyleIndex = hairStyleIndex,
+        companionPoseIndex = companionPoseIndex,
+      ),
+    )
+  }
+
+  companion object {
+    fun fromTrainerSpec(
+      spec: TrainerCharacterSpec,
+      projectId: String,
+      isPlayerAvatar: Boolean = false,
+    ): CustomTrainerEntity = CustomTrainerEntity(
+      id = spec.id,
+      projectId = projectId,
+      name = spec.name,
+      title = spec.title,
+      roleCategory = spec.roleCategory.name,
+      regionId = spec.regionId,
+      skinHex = spec.appearance.skinHex,
+      hairHex = spec.appearance.hairHex,
+      outfitPrimaryHex = spec.appearance.outfitPrimaryHex,
+      outfitSecondaryHex = spec.appearance.outfitSecondaryHex,
+      accentHex = spec.appearance.accentHex,
+      headgearToken = spec.appearance.headgear.name,
+      outfitStyleToken = spec.appearance.outfitStyle.name,
+      hairStyleIndex = spec.appearance.hairStyleIndex,
+      companionPoseIndex = spec.appearance.companionPoseIndex,
+      teamDexIdsCsv = spec.teamDexIds.joinToString(","),
+      introQuote = spec.introQuote,
+      defeatQuote = spec.defeatQuote,
+      isPlayerAvatar = isPlayerAvatar,
+      updatedAtEpochMs = System.currentTimeMillis(),
+    )
+  }
+}
+
+@Dao
+interface CustomTrainerDao {
+  @Query("SELECT * FROM custom_trainers ORDER BY isPlayerAvatar DESC, updatedAtEpochMs DESC")
+  fun observeAllCustomTrainers(): Flow<List<CustomTrainerEntity>>
+
+  @Query("SELECT * FROM custom_trainers WHERE projectId = :projectId ORDER BY isPlayerAvatar DESC, updatedAtEpochMs DESC")
+  suspend fun getTrainersForProjectSnapshot(projectId: String): List<CustomTrainerEntity>
+
+  @Query("SELECT * FROM custom_trainers WHERE isPlayerAvatar = 1 ORDER BY updatedAtEpochMs DESC LIMIT 1")
+  suspend fun getSavedProtagonist(): CustomTrainerEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertCustomTrainer(trainer: CustomTrainerEntity)
+
+  @Query("DELETE FROM custom_trainers WHERE id = :id")
+  suspend fun deleteCustomTrainer(id: String)
+}
 
 @Dao
 interface FanGameProjectDao {

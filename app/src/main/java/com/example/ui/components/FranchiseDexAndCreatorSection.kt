@@ -52,7 +52,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.example.data.local.AtlasProgressEntity
 import com.example.data.local.AtlasSpeciesIndexItem
 import com.example.data.local.EncyclopediaEntryEntity
@@ -407,9 +406,11 @@ private fun NativePokemonCard(
             .border(1.dp, accentColor.copy(alpha = 0.7f), RoundedCornerShape(14.dp)),
           contentAlignment = Alignment.Center,
         ) {
-          AsyncImage(
-            model = pokemon.pixelSpriteUrl,
+          ProceduralCreatureThumbnail(
+            dexNumber = pokemon.dexNumber,
             contentDescription = pokemon.name,
+            customPrimaryHex = if (pokemon.isUserModified) pokemon.primaryHex else null,
+            customSecondaryHex = if (pokemon.isUserModified) pokemon.secondaryHex else null,
             modifier = Modifier.size(64.dp),
           )
         }
@@ -539,8 +540,8 @@ private fun CustomDexCloudCard(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      AsyncImage(
-        model = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${entry.baseSpriteId}.png",
+      ProceduralCreatureThumbnail(
+        dexNumber = entry.baseSpriteId.toInt().coerceIn(1, 1025),
         contentDescription = entry.name,
         modifier = Modifier.size(52.dp),
       )

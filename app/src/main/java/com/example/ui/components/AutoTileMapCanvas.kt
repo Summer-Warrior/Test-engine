@@ -45,11 +45,24 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.engine.ConvergedVisualParams
+import com.example.engine.LandmarkSilhouette
+import com.example.engine.MoveDirection
 import com.example.engine.PoiInteractionKind
 import com.example.engine.RegionBiomeStyle
 import com.example.engine.RegionPointOfInterest
+import com.example.engine.RegionSubZone
+import com.example.engine.SubZoneKind
+import com.example.engine.TimeOfDayCycle
+import com.example.engine.TrainerCatalogAndRigEngine
+import com.example.engine.TrainerCharacterSpec
+import com.example.engine.TrainerPose
 import com.example.engine.WeatherCondition
 import com.example.ui.shaders.shovelKnightEntityEffect
 import com.example.ui.theme.CyberCyan
@@ -87,7 +100,7 @@ object AutoTileBitmaskSolver {
   }
 }
 
-private data class BiomePalette(
+internal data class BiomePalette(
   val meadowA: Color,
   val meadowB: Color,
   val grassBase: Color,
@@ -101,16 +114,11 @@ private data class BiomePalette(
   val roofTint: Color,
 )
 
-private fun paletteForBiome(biome: RegionBiomeStyle): BiomePalette = when (biome) {
+internal fun paletteForBiome(biome: RegionBiomeStyle): BiomePalette = when (biome) {
   RegionBiomeStyle.TEMPERATE_MEADOW -> BiomePalette(
     Color(0xFF1F7A43), Color(0xFF258A4D), Color(0xFF114B29), Color(0xFF4ADE80),
     Color(0xFF0369A1), Color(0xFF334155), Color(0xFF0B3B22), Color(0xFF22C55E),
     Color(0xFFD9A95B), Color(0xFFFDE68A), Color(0xFFDC2626),
-  )
-  RegionBiomeStyle.TROPICAL_ATOLL -> BiomePalette(
-    Color(0xFF228858), Color(0xFF2B9C68), Color(0xFF0F5943), Color(0xFF34D399),
-    Color(0xFF0284C7), Color(0xFF64748B), Color(0xFF115E59), Color(0xFF2DD4BF),
-    Color(0xFFE7C582), Color(0xFFFEF08A), Color(0xFF0EA5E9),
   )
   RegionBiomeStyle.AUTUMN_SHRINE -> BiomePalette(
     Color(0xFF5D6B2A), Color(0xFF707E32), Color(0xFF4D3B16), Color(0xFFF59E0B),
@@ -136,11 +144,6 @@ private fun paletteForBiome(biome: RegionBiomeStyle): BiomePalette = when (biome
     Color(0xFF1E4D5C), Color(0xFF255C6E), Color(0xFF0F3847), Color(0xFF38BDF8),
     Color(0xFF0C4A6E), Color(0xFF1E293B), Color(0xFF1E1B4B), Color(0xFF6366F1),
     Color(0xFF475569), Color(0xFF94A3B8), Color(0xFF0284C7),
-  )
-  RegionBiomeStyle.DESERT_CANYON -> BiomePalette(
-    Color(0xFF8C5A2B), Color(0xFF9E6834), Color(0xFF6B3E19), Color(0xFFF59E0B),
-    Color(0xFF0369A1), Color(0xFF57534E), Color(0xFF5C2B16), Color(0xFFEA580C),
-    Color(0xFFD99B4E), Color(0xFFFDE68A), Color(0xFF7C3AED),
   )
   RegionBiomeStyle.GRAND_BOULEVARD -> BiomePalette(
     Color(0xFF247A58), Color(0xFF2D8C66), Color(0xFF14523E), Color(0xFF5EEAD4),
@@ -172,6 +175,56 @@ private fun paletteForBiome(biome: RegionBiomeStyle): BiomePalette = when (biome
     Color(0xFF0369A1), Color(0xFF334155), Color(0xFF164E63), Color(0xFF00F5D4),
     Color(0xFFBAE6FD), Color(0xFFF0F9FF), Color(0xFF06B6D4),
   )
+  RegionBiomeStyle.SEVII_STAR_ISLES -> BiomePalette(
+    Color(0xFF247A53), Color(0xFF2C9162), Color(0xFF154D34), Color(0xFF34D399),
+    Color(0xFF075985), Color(0xFF52525B), Color(0xFF14532D), Color(0xFFFB923C),
+    Color(0xFFE7B872), Color(0xFFFEF08A), Color(0xFFEA580C),
+  )
+  RegionBiomeStyle.ORANGE_CORAL_TRIALS -> BiomePalette(
+    Color(0xFF22996C), Color(0xFF2BB37F), Color(0xFF0E6245), Color(0xFF5EEAD4),
+    Color(0xFF0284C7), Color(0xFF64748B), Color(0xFF0F766E), Color(0xFF2DD4BF),
+    Color(0xFFF3D59B), Color(0xFFFFFBEB), Color(0xFF0EA5E9),
+  )
+  RegionBiomeStyle.DESERT_CANYON -> BiomePalette(
+    Color(0xFF8C5A2B), Color(0xFF9E6834), Color(0xFF6B3E19), Color(0xFFF59E0B),
+    Color(0xFF0369A1), Color(0xFF57534E), Color(0xFF5C2B16), Color(0xFFEA580C),
+    Color(0xFFD99B4E), Color(0xFFFDE68A), Color(0xFF7C3AED),
+  )
+  RegionBiomeStyle.RANGER_HIGHLANDS -> BiomePalette(
+    Color(0xFF2B6F4B), Color(0xFF358259), Color(0xFF16442D), Color(0xFF4ADE80),
+    Color(0xFF1D4ED8), Color(0xFF475569), Color(0xFF134E4A), Color(0xFFEF4444),
+    Color(0xFF94A3B8), Color(0xFFE2E8F0), Color(0xFFDC2626),
+  )
+  RegionBiomeStyle.FEUDAL_KINGDOMS -> BiomePalette(
+    Color(0xFF4A6630), Color(0xFF5A7A3A), Color(0xFF36451E), Color(0xFFFBBF24),
+    Color(0xFF1E3A8A), Color(0xFF44403C), Color(0xFF451A03), Color(0xFFEF4444),
+    Color(0xFFD6B982), Color(0xFFFEF3C7), Color(0xFF991B1B),
+  )
+  RegionBiomeStyle.FERRUM_ARENA -> BiomePalette(
+    Color(0xFF365E52), Color(0xFF427062), Color(0xFF1E3F37), Color(0xFFFB923C),
+    Color(0xFF0C4A6E), Color(0xFF27272A), Color(0xFF1F2937), Color(0xFFF97316),
+    Color(0xFFD4A373), Color(0xFFFDE68A), Color(0xFFEA580C),
+  )
+  RegionBiomeStyle.LENTAL_PHOTOSPHERE -> BiomePalette(
+    Color(0xFF157A6E), Color(0xFF1C9688), Color(0xFF0B4F4A), Color(0xFF2DD4BF),
+    Color(0xFF0369A1), Color(0xFF334155), Color(0xFF065F46), Color(0xFF67E8F9),
+    Color(0xFFA7F3D0), Color(0xFFECFEFF), Color(0xFF14B8A6),
+  )
+  RegionBiomeStyle.PASIO_CONVERGENCE -> BiomePalette(
+    Color(0xFF27677A), Color(0xFF307C91), Color(0xFF164152), Color(0xFF38BDF8),
+    Color(0xFF075985), Color(0xFF334155), Color(0xFF1E3A5F), Color(0xFF7DD3FC),
+    Color(0xFFE0F2FE), Color(0xFFFDE68A), Color(0xFF0284C7),
+  )
+  RegionBiomeStyle.AEOS_STADIUM -> BiomePalette(
+    Color(0xFF2A5B7A), Color(0xFF346E94), Color(0xFF193C57), Color(0xFFC084FC),
+    Color(0xFF1E3A8A), Color(0xFF1E1B4B), Color(0xFF312E81), Color(0xFFA855F7),
+    Color(0xFFD8B4FE), Color(0xFFFEF08A), Color(0xFF9333EA),
+  )
+  RegionBiomeStyle.MYSTERY_ULTRA_RIFT -> BiomePalette(
+    Color(0xFF2E1A47), Color(0xFF3B225C), Color(0xFF1E1033), Color(0xFFE879F9),
+    Color(0xFF1E1B4B), Color(0xFF312E81), Color(0xFF4C1D95), Color(0xFF00F5D4),
+    Color(0xFF7C3AED), Color(0xFFDDD6FE), Color(0xFFA855F7),
+  )
 }
 
 /**
@@ -187,6 +240,10 @@ fun AutoTileMapCanvas(
   viewportSize: Int? = null,
   modifier: Modifier = Modifier,
   biomeStyle: RegionBiomeStyle = RegionBiomeStyle.TEMPERATE_MEADOW,
+  landmarkSilhouette: LandmarkSilhouette = LandmarkSilhouette.INDIGO_SPIRE,
+  timeOfDay: TimeOfDayCycle = TimeOfDayCycle.DAY,
+  subZones: List<RegionSubZone> = emptyList(),
+  showSubZoneLabels: Boolean = false,
   pointsOfInterest: List<RegionPointOfInterest> = emptyList(),
   visuals: ConvergedVisualParams? = null,
   waterCausticsEnabled: Boolean = true,
@@ -196,9 +253,17 @@ fun AutoTileMapCanvas(
   regionAccentColor: Color = CyberCyan,
   showGridOverlay: Boolean = false,
   showMinimap: Boolean = false,
+  regionId: String = "kanto",
   playerRow: Int? = null,
   playerCol: Int? = null,
+  playerFacing: MoveDirection = MoveDirection.DOWN,
+  playerWalkStep: Int = 0,
+  playerTrainerSpec: TrainerCharacterSpec = TrainerCatalogAndRigEngine.defaultProtagonist,
+  showTrailingPartner: Boolean = true,
+  trailingPartnerRow: Int? = null,
+  trailingPartnerCol: Int? = null,
   playerSpriteUrl: String? = null,
+  playerDexNumber: Int = 25,
   playerCustomBitmap: Bitmap? = null,
   enableDragPaint: Boolean = false,
   onTileTappedOrPainted: ((index: Int) -> Unit)? = null,
@@ -309,6 +374,8 @@ fun AutoTileMapCanvas(
             mask = mask,
             variant = variant,
             palette = palette,
+            landmarkSilhouette = landmarkSilhouette,
+            timeOfDay = timeOfDay,
             topLeft = topLeft,
             cellSize = cellSize,
             animPhase = animPhase,
@@ -317,7 +384,7 @@ fun AutoTileMapCanvas(
         }
       }
 
-      // Draw interactive NPC / POI markers inside visible camera window
+      // Subtle pulsing tile beacon under NPC / POI Trainer sprites (sprites rendered crisp in Compose layer above)
       val pulse = 0.7f + 0.3f * sin((animPhase * 6.283f).toDouble()).toFloat()
       pointsOfInterest.forEach { poi ->
         if (poi.col in camCol until (camCol + visibleCount) && poi.row in camRow until (camRow + visibleCount)) {
@@ -328,34 +395,15 @@ fun AutoTileMapCanvas(
             PoiInteractionKind.RIVAL_OR_CHALLENGER -> ElectricCrimson
             PoiInteractionKind.HEALER_OR_LORE -> SgbEmerald
           }
-          // Contact shadow
           drawOval(
             color = Color.Black.copy(alpha = 0.55f),
-            topLeft = Offset(cx - cellW * 0.28f, cy + cellH * 0.16f),
-            size = Size(cellW * 0.56f, cellH * 0.20f),
-          )
-          // Pulsing halo ring
-          drawCircle(
-            color = badgeColor.copy(alpha = 0.38f * pulse),
-            radius = minOf(cellW, cellH) * 0.36f,
-            center = Offset(cx, cy),
-          )
-          // Crisp NPC figure badge
-          drawCircle(
-            color = Color(0xFF0A1020),
-            radius = minOf(cellW, cellH) * 0.24f,
-            center = Offset(cx, cy),
+            topLeft = Offset(cx - cellW * 0.30f, cy + cellH * 0.18f),
+            size = Size(cellW * 0.60f, cellH * 0.22f),
           )
           drawCircle(
-            color = badgeColor,
-            radius = minOf(cellW, cellH) * 0.22f,
-            center = Offset(cx, cy),
-            style = Stroke(width = 2.4f),
-          )
-          drawCircle(
-            color = Color.White,
-            radius = minOf(cellW, cellH) * 0.08f,
-            center = Offset(cx, cy - cellH * 0.03f),
+            color = badgeColor.copy(alpha = 0.30f * pulse),
+            radius = minOf(cellW, cellH) * 0.38f,
+            center = Offset(cx, cy + cellH * 0.12f),
           )
         }
       }
@@ -391,12 +439,154 @@ fun AutoTileMapCanvas(
         }
       }
 
+      // Atmospheric Day / Dusk / Night Lighting Pass + Luminous Night Lanterns
+      drawTimeOfDayAtmospherePass(
+        timeOfDay = timeOfDay,
+        tiles = tiles,
+        gridSize = gridSize,
+        camCol = camCol,
+        camRow = camRow,
+        visibleCount = visibleCount,
+        cellW = cellW,
+        cellH = cellH,
+        animPhase = animPhase,
+        regionAccent = regionAccentColor,
+      )
+
       if (weatherParticlesEnabled) {
         drawWeatherParticlesOverlay(weather = weather, animPhase = animPhase, accent = regionAccentColor)
       }
     }
 
-    // Grounded Shovel Knight+ Overworld Player Avatar (ZERO harsh cyan rectangle border!)
+    // Optional Crisp Regional Sub-Zone Landmark Ribbon Badges (Hub Town, Wild Biome, Prism Sanctuary)
+    if (showSubZoneLabels && subZones.isNotEmpty()) {
+      subZones.forEach { zone ->
+        if (zone.col in camCol until (camCol + visibleCount) && zone.row in camRow until (camRow + visibleCount)) {
+          val relCol = (zone.col - camCol).coerceIn(0, (visibleCount - 4).coerceAtLeast(0))
+          val relRow = (zone.row - camRow).coerceIn(0, (visibleCount - 1).coerceAtLeast(0))
+          val zoneColor = when (zone.kind) {
+            SubZoneKind.HUB_TOWN -> SgbEmerald
+            SubZoneKind.WILD_BIOME -> SuperFxGold
+            SubZoneKind.PRISM_SANCTUARY -> CyberCyan
+          }
+          Box(
+            modifier = Modifier
+              .offset(x = tileDp * relCol, y = (tileDp * relRow - 4.dp).coerceAtLeast(2.dp))
+              .clip(RoundedCornerShape(6.dp))
+              .background(Color(0xD6080F1E))
+              .border(1.dp, zoneColor.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+              .padding(horizontal = 5.dp, vertical = 2.dp),
+          ) {
+            Text(
+              text = "${zone.name} · ${zone.sourceTag}",
+              style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, lineHeight = 10.sp),
+              color = zoneColor,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+      }
+    }
+
+    // Crisp 2D Overworld Trainer Pixel Sprites for every visible NPC / POI
+    pointsOfInterest.forEach { poi ->
+      if (poi.col in camCol until (camCol + visibleCount) && poi.row in camRow until (camRow + visibleCount)) {
+        val relCol = poi.col - camCol
+        val relRow = poi.row - camRow
+        val npcTrainer = remember(poi.id, regionId) {
+          TrainerCatalogAndRigEngine.resolveTrainerForPoi(poi, regionId)
+        }
+        val npcBobDp = (-sin((animPhase * 6.283f) + poi.col * 0.9f) * 1.4f).dp
+        val roleTint = when (poi.interactionKind) {
+          PoiInteractionKind.PROFESSOR_GUIDE -> SuperFxGold
+          PoiInteractionKind.RIVAL_OR_CHALLENGER -> ElectricCrimson
+          PoiInteractionKind.HEALER_OR_LORE -> SgbEmerald
+        }
+        Box(
+          modifier = Modifier
+            .offset(x = tileDp * relCol, y = tileDp * relRow)
+            .size(tileDp)
+            .testTag("autotile_npc_${poi.id}"),
+          contentAlignment = Alignment.Center,
+        ) {
+          TrainerOverworldThumbnail(
+            trainer = npcTrainer,
+            pose = TrainerPose.OVERWORLD_DOWN,
+            walkFrameIndex = 0,
+            modifier = Modifier
+              .size(tileDp * 0.94f)
+              .offset(y = npcBobDp),
+          )
+          // Compact role exclamation / talk pip at top-right corner
+          Box(
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .offset(x = (-1).dp, y = (-2).dp)
+              .clip(RoundedCornerShape(4.dp))
+              .background(roleTint)
+              .padding(horizontal = 3.dp),
+          ) {
+            Text(
+              text = when (poi.interactionKind) {
+                PoiInteractionKind.RIVAL_OR_CHALLENGER -> "!"
+                PoiInteractionKind.PROFESSOR_GUIDE -> "?"
+                PoiInteractionKind.HEALER_OR_LORE -> "+"
+              },
+              style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp, lineHeight = 9.sp),
+              color = Color.Black,
+              fontWeight = FontWeight.ExtraBold,
+            )
+          }
+        }
+      }
+    }
+
+    // Optional Trailing Partner Creature walking right behind the Playable Trainer Avatar
+    if (showTrailingPartner && trailingPartnerRow != null && trailingPartnerCol != null &&
+      (trailingPartnerRow != playerRow || trailingPartnerCol != playerCol) &&
+      trailingPartnerRow in camRow until (camRow + visibleCount) &&
+      trailingPartnerCol in camCol until (camCol + visibleCount)
+    ) {
+      val relCol = trailingPartnerCol - camCol
+      val relRow = trailingPartnerRow - camRow
+      val partnerBobDp = (-sin((animPhase * 6.283f * 2f) + 1.1f) * 1.8f).dp
+      val resolvedDex = playerSpriteUrl
+        ?.substringAfterLast("/")
+        ?.substringBefore(".")
+        ?.toIntOrNull()
+        ?.coerceIn(1, 1025)
+        ?: playerDexNumber
+      Box(
+        modifier = Modifier
+          .offset(x = tileDp * relCol, y = tileDp * relRow)
+          .size(tileDp)
+          .testTag("autotile_trailing_partner"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Canvas(
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .size(width = tileDp * 0.64f, height = tileDp * 0.20f),
+        ) {
+          drawOval(
+            brush = Brush.radialGradient(
+              colors = listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent),
+            ),
+          )
+        }
+        ProceduralCreatureThumbnail(
+          dexNumber = resolvedDex,
+          contentDescription = "Trailing Partner Creature",
+          modifier = Modifier
+            .size(tileDp * 0.86f)
+            .offset(y = partnerBobDp),
+        )
+      }
+    }
+
+    // Grounded Shovel Knight+ Playable Trainer Avatar (4-direction facing + animated walk stride!)
     if (playerRow != null && playerCol != null &&
       playerRow in camRow until (camRow + visibleCount) &&
       playerCol in camCol until (camCol + visibleCount)
@@ -417,6 +607,7 @@ fun AutoTileMapCanvas(
       } else {
         Modifier
       }
+      val playerPose = TrainerCatalogAndRigEngine.poseForDirection(playerFacing)
 
       Box(
         modifier = Modifier
@@ -443,7 +634,7 @@ fun AutoTileMapCanvas(
         }
         Box(
           modifier = Modifier
-            .size(tileDp * 0.94f)
+            .size(tileDp * 0.96f)
             .offset(y = bobDp)
             .then(shaderMod),
           contentAlignment = Alignment.Center,
@@ -456,12 +647,11 @@ fun AutoTileMapCanvas(
               contentScale = ContentScale.Fit,
               modifier = Modifier.fillMaxSize(),
             )
-          } else if (!playerSpriteUrl.isNullOrBlank()) {
-            AsyncImage(
-              model = playerSpriteUrl,
-              contentDescription = "Trainer Partner Sprite",
-              filterQuality = FilterQuality.None,
-              contentScale = ContentScale.Fit,
+          } else {
+            TrainerOverworldThumbnail(
+              trainer = playerTrainerSpec,
+              pose = playerPose,
+              walkFrameIndex = playerWalkStep,
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -540,6 +730,8 @@ private fun DrawScope.drawAutoTiledCell(
   mask: Int,
   variant: Int,
   palette: BiomePalette,
+  landmarkSilhouette: LandmarkSilhouette,
+  timeOfDay: TimeOfDayCycle,
   topLeft: Offset,
   cellSize: Size,
   animPhase: Float,
@@ -670,20 +862,29 @@ private fun DrawScope.drawAutoTiledCell(
     }
 
     5 -> {
-      // 5 = Prism Sanctuary / Gym Arena
+      // 5 = Prism Sanctuary / Gym Arena with Signature Silhouette Crest
       drawRect(Color(0xFF1E1B4B), topLeft, cellSize)
       drawRect(Color(0xFF312E81), Offset(x, y), Size(w * 0.5f, h * 0.5f))
       drawRect(Color(0xFF312E81), Offset(x + w * 0.5f, y + h * 0.5f), Size(w * 0.5f, h * 0.5f))
       val diamond = Path().apply {
-        moveTo(x + w * 0.5f, y + h * 0.12f)
-        lineTo(x + w * 0.86f, y + h * 0.5f)
-        lineTo(x + w * 0.5f, y + h * 0.88f)
-        lineTo(x + w * 0.14f, y + h * 0.5f)
+        moveTo(x + w * 0.5f, y + h * 0.10f)
+        lineTo(x + w * 0.88f, y + h * 0.5f)
+        lineTo(x + w * 0.5f, y + h * 0.90f)
+        lineTo(x + w * 0.12f, y + h * 0.5f)
         close()
       }
-      drawPath(diamond, color = CyberCyan.copy(alpha = 0.52f))
-      drawPath(diamond, color = Color.White.copy(alpha = 0.85f), style = Stroke(width = 1.4f))
-      drawCircle(SuperFxGold, radius = minOf(w, h) * 0.10f, center = Offset(x + w * 0.5f, y + h * 0.5f))
+      drawPath(diamond, color = CyberCyan.copy(alpha = if (timeOfDay == TimeOfDayCycle.NIGHT) 0.72f else 0.50f))
+      drawPath(diamond, color = Color.White.copy(alpha = 0.88f), style = Stroke(width = 1.4f))
+      drawLandmarkSilhouetteOverlay(
+        silhouette = landmarkSilhouette,
+        palette = palette,
+        x = x,
+        y = y,
+        w = w,
+        h = h,
+        animPhase = animPhase,
+        isSanctuary = true,
+      )
     }
 
     6 -> {
@@ -734,12 +935,26 @@ private fun DrawScope.drawAutoTiledCell(
     }
 
     10 -> {
-      // 10 = Landmark Roof / Building (Blocked)
-      drawRect(Color(0xFF1E293B), topLeft, cellSize)
-      drawRect(palette.roofTint, Offset(x + w * 0.06f, y + h * 0.08f), Size(w * 0.88f, h * 0.48f))
-      drawRect(Color.White.copy(alpha = 0.22f), Offset(x + w * 0.06f, y + h * 0.08f), Size(w * 0.88f, h * 0.14f))
-      drawRect(Color(0xFFCBD5E1), Offset(x + w * 0.12f, y + h * 0.56f), Size(w * 0.76f, h * 0.36f))
-      drawRect(Color(0xFF0EA5E9), Offset(x + w * 0.36f, y + h * 0.64f), Size(w * 0.28f, h * 0.24f))
+      // 10 = Landmark Building / Regional Signature Silhouette (Blocked)
+      drawRect(Color(0xFF111827), topLeft, cellSize)
+      drawLandmarkSilhouetteOverlay(
+        silhouette = landmarkSilhouette,
+        palette = palette,
+        x = x,
+        y = y,
+        w = w,
+        h = h,
+        animPhase = animPhase,
+        isSanctuary = false,
+      )
+      if (timeOfDay != TimeOfDayCycle.DAY) {
+        // Warm illuminated windows at Dusk/Night
+        drawRect(
+          color = SuperFxGold.copy(alpha = if (timeOfDay == TimeOfDayCycle.NIGHT) 0.92f else 0.65f),
+          topLeft = Offset(x + w * 0.40f, y + h * 0.66f),
+          size = Size(w * 0.20f, h * 0.18f),
+        )
+      }
     }
 
     else -> {
@@ -795,6 +1010,250 @@ private fun DrawScope.drawWeatherParticlesOverlay(
       }
       WeatherCondition.CLEAR -> {
         drawCircle(accent.copy(alpha = 0.42f), radius = 2.2f, center = Offset(px, py))
+      }
+    }
+  }
+}
+
+/**
+ * Procedurally draws signature inspired regional landmark silhouettes on Landmark (10) and Sanctuary (5) tiles.
+ */
+private fun DrawScope.drawLandmarkSilhouetteOverlay(
+  silhouette: LandmarkSilhouette,
+  palette: BiomePalette,
+  x: Float,
+  y: Float,
+  w: Float,
+  h: Float,
+  animPhase: Float,
+  isSanctuary: Boolean,
+) {
+  val accent = if (isSanctuary) SuperFxGold else palette.roofTint
+  val pulse = 0.7f + 0.3f * sin((animPhase * 6.283f).toDouble()).toFloat()
+
+  when (silhouette) {
+    LandmarkSilhouette.PAGODA_TOWER, LandmarkSilhouette.LANTERN_TEMPLE -> {
+      // Tiered Pagoda eaves + golden spire
+      drawRect(Color(0xFFCBD5E1), Offset(x + w * 0.26f, y + h * 0.54f), Size(w * 0.48f, h * 0.38f))
+      for (tier in 0..2) {
+        val tw = w * (0.88f - tier * 0.20f)
+        val ty = y + h * (0.50f - tier * 0.17f)
+        val roof = Path().apply {
+          moveTo(x + (w - tw) * 0.5f, ty + h * 0.14f)
+          lineTo(x + w * 0.5f, ty)
+          lineTo(x + (w + tw) * 0.5f, ty + h * 0.14f)
+          close()
+        }
+        drawPath(roof, accent)
+      }
+      drawCircle(SuperFxGold.copy(alpha = pulse), radius = minOf(w, h) * 0.08f, center = Offset(x + w * 0.5f, y + h * 0.12f))
+    }
+
+    LandmarkSilhouette.VOLCANIC_RIDGE -> {
+      // Twin volcanic caldera peaks with glowing magma rim
+      val peak = Path().apply {
+        moveTo(x + w * 0.08f, y + h * 0.90f)
+        lineTo(x + w * 0.36f, y + h * 0.22f)
+        lineTo(x + w * 0.64f, y + h * 0.22f)
+        lineTo(x + w * 0.92f, y + h * 0.90f)
+        close()
+      }
+      drawPath(peak, Color(0xFF451A03))
+      drawLine(Color(0xFFF97316).copy(alpha = pulse), Offset(x + w * 0.34f, y + h * 0.24f), Offset(x + w * 0.66f, y + h * 0.24f), strokeWidth = 2.6f)
+      drawCircle(SuperFxGold.copy(alpha = pulse), radius = minOf(w, h) * 0.10f, center = Offset(x + w * 0.5f, y + h * 0.18f))
+    }
+
+    LandmarkSilhouette.CRYSTAL_SPIRE, LandmarkSilhouette.PRISM_TOWER, LandmarkSilhouette.INDIGO_SPIRE -> {
+      // Faceted Crystal / Prism Tower silhouette
+      val spire = Path().apply {
+        moveTo(x + w * 0.50f, y + h * 0.06f)
+        lineTo(x + w * 0.78f, y + h * 0.62f)
+        lineTo(x + w * 0.66f, y + h * 0.92f)
+        lineTo(x + w * 0.34f, y + h * 0.92f)
+        lineTo(x + w * 0.22f, y + h * 0.62f)
+        close()
+      }
+      drawPath(spire, accent.copy(alpha = 0.85f))
+      drawPath(spire, Color.White.copy(alpha = 0.78f), style = Stroke(width = 1.3f))
+      drawCircle(CyberCyan.copy(alpha = pulse), radius = minOf(w, h) * 0.11f, center = Offset(x + w * 0.5f, y + h * 0.44f))
+    }
+
+    LandmarkSilhouette.DESERT_MESA -> {
+      // Terraced sandstone desert mesa
+      drawRect(Color(0xFF92400E), Offset(x + w * 0.10f, y + h * 0.58f), Size(w * 0.80f, h * 0.34f))
+      drawRect(Color(0xFFD97706), Offset(x + w * 0.20f, y + h * 0.32f), Size(w * 0.60f, h * 0.28f))
+      drawRect(Color(0xFFFDE68A), Offset(x + w * 0.24f, y + h * 0.28f), Size(w * 0.52f, h * 0.08f))
+    }
+
+    LandmarkSilhouette.NEON_BRIDGE -> {
+      // Neon twin suspension pylons + cables
+      drawRect(Color(0xFF0F172A), Offset(x + w * 0.12f, y + h * 0.62f), Size(w * 0.76f, h * 0.26f))
+      drawLine(CyberCyan, Offset(x + w * 0.24f, y + h * 0.14f), Offset(x + w * 0.24f, y + h * 0.88f), 2.4f)
+      drawLine(CyberCyan, Offset(x + w * 0.76f, y + h * 0.14f), Offset(x + w * 0.76f, y + h * 0.88f), 2.4f)
+      drawLine(SuperFxGold.copy(alpha = pulse), Offset(x + w * 0.24f, y + h * 0.22f), Offset(x + w * 0.50f, y + h * 0.60f), 1.4f)
+      drawLine(SuperFxGold.copy(alpha = pulse), Offset(x + w * 0.76f, y + h * 0.22f), Offset(x + w * 0.50f, y + h * 0.60f), 1.4f)
+    }
+
+    LandmarkSilhouette.CORAL_REEF -> {
+      // Coral arch & sunlit sea altar
+      drawArc(
+        color = Color(0xFFFB7185),
+        startAngle = 180f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(x + w * 0.14f, y + h * 0.22f),
+        size = Size(w * 0.72f, h * 0.72f),
+        style = Stroke(width = minOf(w, h) * 0.14f),
+      )
+      drawCircle(Color(0xFF38BDF8).copy(alpha = pulse), radius = minOf(w, h) * 0.14f, center = Offset(x + w * 0.5f, y + h * 0.58f))
+    }
+
+    LandmarkSilhouette.SNOW_PEAKS -> {
+      // Twin alpine snow peaks with glacier caps
+      val mtn = Path().apply {
+        moveTo(x + w * 0.06f, y + h * 0.90f)
+        lineTo(x + w * 0.38f, y + h * 0.16f)
+        lineTo(x + w * 0.58f, y + h * 0.50f)
+        lineTo(x + w * 0.76f, y + h * 0.26f)
+        lineTo(x + w * 0.94f, y + h * 0.90f)
+        close()
+      }
+      drawPath(mtn, Color(0xFF475569))
+      val cap = Path().apply {
+        moveTo(x + w * 0.38f, y + h * 0.16f)
+        lineTo(x + w * 0.28f, y + h * 0.40f)
+        lineTo(x + w * 0.48f, y + h * 0.40f)
+        close()
+      }
+      drawPath(cap, Color(0xFFF8FAFC))
+    }
+
+    LandmarkSilhouette.DIMENSIONAL_RIFT -> {
+      // Swirling Ultra-Distortion portal vortex
+      drawCircle(Color(0xFFA855F7).copy(alpha = pulse), radius = minOf(w, h) * 0.36f, center = Offset(x + w * 0.5f, y + h * 0.5f), style = Stroke(2.2f))
+      drawCircle(CyberCyan.copy(alpha = pulse), radius = minOf(w, h) * 0.22f, center = Offset(x + w * 0.5f, y + h * 0.5f), style = Stroke(1.8f))
+      drawCircle(Color.White, radius = minOf(w, h) * 0.09f, center = Offset(x + w * 0.5f, y + h * 0.5f))
+    }
+
+    LandmarkSilhouette.ARENA_DOME -> {
+      // Stadium dome with floodlight arc
+      drawArc(
+        color = accent,
+        startAngle = 180f,
+        sweepAngle = 180f,
+        useCenter = true,
+        topLeft = Offset(x + w * 0.10f, y + h * 0.22f),
+        size = Size(w * 0.80f, h * 0.68f),
+      )
+      drawRect(Color(0xFFE2E8F0), Offset(x + w * 0.12f, y + h * 0.56f), Size(w * 0.76f, h * 0.32f))
+      drawLine(SuperFxGold.copy(alpha = pulse), Offset(x + w * 0.22f, y + h * 0.22f), Offset(x + w * 0.78f, y + h * 0.22f), 1.8f)
+    }
+
+    LandmarkSilhouette.FEUDAL_CASTLE -> {
+      // Tiered feudal castle keep + banner crest
+      drawRect(Color(0xFF44403C), Offset(x + w * 0.14f, y + h * 0.58f), Size(w * 0.72f, h * 0.34f))
+      drawRect(Color(0xFFF8FAFC), Offset(x + w * 0.24f, y + h * 0.34f), Size(w * 0.52f, h * 0.26f))
+      drawRect(accent, Offset(x + w * 0.16f, y + h * 0.26f), Size(w * 0.68f, h * 0.12f))
+      drawRect(SuperFxGold, Offset(x + w * 0.46f, y + h * 0.10f), Size(w * 0.08f, h * 0.16f))
+    }
+
+    LandmarkSilhouette.ILLUMINA_BLOOM -> {
+      // Glowing bioluminescent Crystabloom petals
+      for (i in 0..3) {
+        val dx = if (i % 2 == 0) -0.18f else 0.18f
+        val dy = if (i < 2) -0.18f else 0.18f
+        drawCircle(Color(0xFF2DD4BF).copy(alpha = 0.75f * pulse), radius = minOf(w, h) * 0.18f, center = Offset(x + w * (0.5f + dx), y + h * (0.5f + dy)))
+      }
+      drawCircle(Color.White, radius = minOf(w, h) * 0.12f, center = Offset(x + w * 0.5f, y + h * 0.5f))
+    }
+
+    LandmarkSilhouette.ANCIENT_SHRINE, LandmarkSilhouette.RANGER_TOWER -> {
+      // Twin shrine columns / Ranger Styler relay arch
+      drawRect(accent, Offset(x + w * 0.12f, y + h * 0.18f), Size(w * 0.76f, h * 0.14f))
+      drawRect(Color(0xFFE2E8F0), Offset(x + w * 0.22f, y + h * 0.32f), Size(w * 0.14f, h * 0.58f))
+      drawRect(Color(0xFFE2E8F0), Offset(x + w * 0.64f, y + h * 0.32f), Size(w * 0.14f, h * 0.58f))
+      drawCircle(SuperFxGold.copy(alpha = pulse), radius = minOf(w, h) * 0.10f, center = Offset(x + w * 0.5f, y + h * 0.46f))
+    }
+  }
+}
+
+/**
+ * Atmospheric Day / Dusk / Night lighting pass over the AutoTileMapCanvas:
+ * - DAY: crisp subtle top highlight
+ * - DUSK: warm golden-amber horizon wash + violet twilight edge shadow
+ * - NIGHT: deep midnight-indigo moonlight wash + glowing radial lantern/sanctuary/healing/warp blooms
+ */
+private fun DrawScope.drawTimeOfDayAtmospherePass(
+  timeOfDay: TimeOfDayCycle,
+  tiles: List<Int>,
+  gridSize: Int,
+  camCol: Int,
+  camRow: Int,
+  visibleCount: Int,
+  cellW: Float,
+  cellH: Float,
+  animPhase: Float,
+  regionAccent: Color,
+) {
+  when (timeOfDay) {
+    TimeOfDayCycle.DAY -> Unit
+    TimeOfDayCycle.DUSK -> {
+      drawRect(
+        brush = Brush.verticalGradient(
+          colors = listOf(
+            Color(0x4AF97316), // warm golden-amber sky glow
+            Color(0x28EC4899), // sunset magenta mid-haze
+            Color(0x3D1E1B4B), // cool dusk ground shadow
+          ),
+        ),
+        size = size,
+      )
+    }
+    TimeOfDayCycle.NIGHT -> {
+      drawRect(
+        brush = Brush.verticalGradient(
+          colors = listOf(
+            Color(0x78070B1E),
+            Color(0x660F172A),
+            Color(0x80090D24),
+          ),
+        ),
+        size = size,
+      )
+      // Luminous blooms around Healing Plazas (8), Prism Sanctuaries (5), Landmarks (10), & Warp Gates (11)
+      val pulse = 0.8f + 0.2f * sin((animPhase * 6.283f).toDouble()).toFloat()
+      for (vr in 0 until visibleCount) {
+        val r = camRow + vr
+        for (vc in 0 until visibleCount) {
+          val c = camCol + vc
+          val t = tiles.getOrElse(r * gridSize + c) { 0 }
+          val glowColor = when (t) {
+            5 -> CyberCyan
+            8 -> SgbEmerald
+            10 -> SuperFxGold
+            11 -> Color(0xFFC084FC)
+            else -> null
+          }
+          if (glowColor != null) {
+            val center = Offset((vc + 0.5f) * cellW, (vr + 0.5f) * cellH)
+            drawCircle(
+              brush = Brush.radialGradient(
+                colors = listOf(glowColor.copy(alpha = 0.42f * pulse), Color.Transparent),
+                center = center,
+                radius = maxOf(cellW, cellH) * 1.15f,
+              ),
+              center = center,
+              radius = maxOf(cellW, cellH) * 1.15f,
+            )
+          }
+        }
+      }
+      // Subtle twinkling night stars along top edge
+      for (i in 0..8) {
+        val sx = ((i * 37 + 11) % 97) / 97f * size.width
+        val sy = ((i * 19 + 5) % 24) / 100f * size.height
+        val starAlpha = (0.35f + 0.45f * sin((animPhase * 6.283f + i * 1.4f).toDouble()).toFloat()).coerceIn(0.15f, 0.9f)
+        drawCircle(regionAccent.copy(alpha = starAlpha), radius = 1.6f, center = Offset(sx, sy))
       }
     }
   }

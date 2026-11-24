@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -67,8 +68,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.SubcomposeAsyncImage
-import coil.request.ImageRequest
+import com.example.data.local.CustomTrainerEntity
 import com.example.data.local.NativePokemonEntity
 import com.example.data.local.SavedSpriteEntity
 import com.example.data.model.AssetCategory
@@ -76,6 +76,9 @@ import com.example.data.model.ConsoleHardwareCatalog
 import com.example.data.model.CustomDexEntry
 import com.example.data.model.CustomStudioAsset
 import com.example.data.model.FanGameProject
+import com.example.engine.TrainerCatalogAndRigEngine
+import com.example.engine.TrainerCharacterSpec
+import com.example.engine.TrainerPose
 import com.example.ui.BuiltInAssetItem
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyberCyan
@@ -120,6 +123,9 @@ fun CategorizedAssetSidebar(
   onOpenProjectDashboard: () -> Unit,
   savedSprites: List<SavedSpriteEntity> = emptyList(),
   onLoadSavedSprite: ((SavedSpriteEntity) -> Unit)? = null,
+  customTrainers: List<CustomTrainerEntity> = emptyList(),
+  onSelectTrainer: ((TrainerCharacterSpec) -> Unit)? = null,
+  onDeleteCustomTrainer: ((String) -> Unit)? = null,
   isCompactDrawerMode: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -163,7 +169,6 @@ fun CategorizedAssetSidebar(
             chipAddon = entity.recommendedChipAddon,
             spriteSeedId = entity.dexNumber,
             shaderFormula = "SPRITE:2D|GEN:${entity.generation}|#${entity.dexNumber}",
-            thumbnailUrl = entity.pixelSpriteUrl,
             databaseTag = "DB #${entity.dexNumber}",
           )
         )
@@ -176,7 +181,6 @@ fun CategorizedAssetSidebar(
             chipAddon = entity.recommendedChipAddon,
             spriteSeedId = entity.dexNumber,
             shaderFormula = "MODEL:3D|VOXEL:ON|#${entity.dexNumber}",
-            thumbnailUrl = entity.home3dRenderUrl,
             databaseTag = "3D #${entity.dexNumber}",
           )
         )
@@ -195,7 +199,6 @@ fun CategorizedAssetSidebar(
             shaderFormula = "CUSTOM_DEX|#${custom.dexNumber}",
             isCustomCloud = true,
             cloudDocId = custom.id,
-            thumbnailUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/$seedId.png",
             databaseTag = "DEX #${custom.dexNumber}",
           )
         )
@@ -210,7 +213,6 @@ fun CategorizedAssetSidebar(
             shaderFormula = "CUSTOM_3D|#${custom.dexNumber}",
             isCustomCloud = true,
             cloudDocId = custom.id,
-            thumbnailUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/$seedId.png",
             databaseTag = "3D #${custom.dexNumber}",
           )
         )
@@ -255,11 +257,56 @@ fun CategorizedAssetSidebar(
     }
   }
 
+  val trainerByIdMap = remember(customTrainers) {
+    buildMap {
+      TrainerCatalogAndRigEngine.allBuiltInTrainers.forEach { put(it.id, it) }
+      customTrainers.forEach { put(it.id, it.toTrainerSpec()) }
+    }
+  }
+
+  val trainerSidebarAssets = remember(customTrainers) {
+    buildList {
+      customTrainers.forEach { custom ->
+        val spec = custom.toTrainerSpec()
+        add(
+          BuiltInAssetItem(
+            id = "custom_trainer_${custom.id}",
+            name = spec.name,
+            category = AssetCategory.TRAINERS,
+            consoleLineage = "${spec.title} • ${spec.teamDexIds.size} Partners",
+            chipAddon = if (custom.isPlayerAvatar) "Player Avatar (Room v5)" else "Custom Trainer (Room v5)",
+            spriteSeedId = spec.teamDexIds.firstOrNull() ?: 25,
+            shaderFormula = "TRAINER:${spec.id}",
+            isCustomCloud = true,
+            cloudDocId = custom.id,
+            projectId = custom.projectId,
+            databaseTag = if (custom.isPlayerAvatar) "HERO" else "CUSTOM",
+          )
+        )
+      }
+      TrainerCatalogAndRigEngine.allBuiltInTrainers.forEach { spec ->
+        add(
+          BuiltInAssetItem(
+            id = "trainer_${spec.id}",
+            name = spec.name,
+            category = AssetCategory.TRAINERS,
+            consoleLineage = "${spec.title} • ${spec.regionId.replace("_", " ").uppercase()}",
+            chipAddon = "${spec.roleCategory.label} (${spec.teamDexIds.size}v6)",
+            spriteSeedId = spec.teamDexIds.firstOrNull() ?: 25,
+            shaderFormula = "TRAINER:${spec.id}|${spec.sourceInspiration}",
+            databaseTag = spec.roleCategory.badge,
+          )
+        )
+      }
+    }
+  }
+
   val isSearching = searchQuery.isNotBlank()
 
   val displayedAssets = remember(
     allCloudAssets,
     roomSpriteAssets,
+    trainerSidebarAssets,
     integratedDatabaseAssets,
     selectedCategory,
     searchQuery,
@@ -270,6 +317,7 @@ fun CategorizedAssetSidebar(
     val combinedPool = buildList {
       addAll(roomSpriteAssets)
       addAll(allCloudAssets)
+      addAll(trainerSidebarAssets)
       addAll(StudioViewModel.builtInSidebarAssets)
       addAll(integratedDatabaseAssets)
     }
@@ -605,13 +653,22 @@ fun CategorizedAssetSidebar(
                 val matchesActiveProject = activeChipKeywords.isNotEmpty() && activeChipKeywords.any { key ->
                   asset.chipAddon.lowercase().contains(key) || asset.consoleLineage.lowercase().contains(key)
                 }
+                val matchedTrainerSpec = if (asset.category == AssetCategory.TRAINERS) {
+                  val tId = asset.shaderFormula.substringAfter("TRAINER:").substringBefore("|")
+                  trainerByIdMap[tId]
+                } else {
+                  null
+                }
                 SidebarAssetCard(
                   asset = asset,
                   accentColor = categoryAccentColor(asset.category),
                   matchesActiveProject = matchesActiveProject,
                   showCategoryTag = isSearching,
+                  trainerSpec = matchedTrainerSpec,
                   onClick = {
-                    if (asset.id.startsWith("room_spr_")) {
+                    if (matchedTrainerSpec != null && onSelectTrainer != null) {
+                      onSelectTrainer(matchedTrainerSpec)
+                    } else if (asset.id.startsWith("room_spr_")) {
                       val sprId = asset.id.removePrefix("room_spr_")
                       val match = savedSprites.firstOrNull { it.id == sprId }
                       if (match != null && onLoadSavedSprite != null) {
@@ -623,10 +680,14 @@ fun CategorizedAssetSidebar(
                       onSelectAsset(asset)
                     }
                   },
-                  onDelete = if (asset.isCustomCloud && asset.id.startsWith("cloud_") && !asset.id.startsWith("cloud_dex_")) {
-                    { onDeleteCustomAsset(asset.cloudDocId) }
-                  } else {
-                    null
+                  onDelete = when {
+                    asset.id.startsWith("custom_trainer_") && onDeleteCustomTrainer != null -> {
+                      { onDeleteCustomTrainer(asset.cloudDocId) }
+                    }
+                    asset.isCustomCloud && asset.id.startsWith("cloud_") && !asset.id.startsWith("cloud_dex_") -> {
+                      { onDeleteCustomAsset(asset.cloudDocId) }
+                    }
+                    else -> null
                   },
                 )
               }
@@ -779,6 +840,7 @@ private fun SidebarAssetCard(
   accentColor: Color,
   matchesActiveProject: Boolean,
   showCategoryTag: Boolean,
+  trainerSpec: TrainerCharacterSpec? = null,
   onClick: () -> Unit,
   onDelete: (() -> Unit)?,
 ) {
@@ -803,6 +865,7 @@ private fun SidebarAssetCard(
       AssetThumbnailPreview(
         asset = asset,
         accentColor = accentColor,
+        trainerSpec = trainerSpec,
       )
 
       Column(modifier = Modifier.weight(1f)) {
@@ -918,26 +981,8 @@ private fun SidebarAssetCard(
 private fun AssetThumbnailPreview(
   asset: BuiltInAssetItem,
   accentColor: Color,
+  trainerSpec: TrainerCharacterSpec? = null,
 ) {
-  val context = LocalContext.current
-  val resolvedUrl = remember(asset.id, asset.thumbnailUrl, asset.category, asset.spriteSeedId) {
-    asset.thumbnailUrl ?: when (asset.category) {
-      AssetCategory.MODELS_3D ->
-        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/${asset.spriteSeedId}.png"
-      AssetCategory.TEXTURES ->
-        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${asset.spriteSeedId}.png"
-      else ->
-        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${asset.spriteSeedId}.png"
-    }
-  }
-  val imageRequest = remember(resolvedUrl, context) {
-    ImageRequest.Builder(context)
-      .data(resolvedUrl)
-      .crossfade(true)
-      .size(128)
-      .build()
-  }
-
   Box(
     modifier = Modifier
       .size(46.dp)
@@ -954,45 +999,32 @@ private fun AssetThumbnailPreview(
       .testTag("asset_thumbnail_${asset.id}"),
     contentAlignment = Alignment.Center,
   ) {
-    SubcomposeAsyncImage(
-      model = imageRequest,
-      contentDescription = "${asset.name} thumbnail preview",
-      contentScale = ContentScale.Fit,
-      modifier = Modifier
-        .size(40.dp)
-        .padding(2.dp),
-      loading = {
-        Box(
-          modifier = Modifier.size(40.dp),
-          contentAlignment = Alignment.Center,
-        ) {
-          CircularProgressIndicator(
-            color = accentColor,
-            strokeWidth = 1.5.dp,
-            modifier = Modifier.size(16.dp),
-          )
-        }
-      },
-      error = {
-        Box(
-          modifier = Modifier.size(40.dp),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = categoryIcon(asset.category),
-            contentDescription = "${asset.category.label} fallback preview",
-            tint = accentColor,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-      },
-    )
+    if (trainerSpec != null) {
+      TrainerOverworldThumbnail(
+        trainer = trainerSpec,
+        pose = TrainerPose.BATTLE_IDLE,
+        use3dVoxel = false,
+        modifier = Modifier
+          .size(42.dp)
+          .padding(2.dp),
+      )
+    } else {
+      ProceduralCreatureThumbnail(
+        dexNumber = asset.spriteSeedId.coerceIn(1, 1025),
+        is3dModel = asset.category == AssetCategory.MODELS_3D,
+        contentDescription = "${asset.name} thumbnail preview",
+        modifier = Modifier
+          .size(40.dp)
+          .padding(2.dp),
+      )
+    }
   }
 }
 
 private fun categoryIcon(category: AssetCategory): ImageVector = when (category) {
   AssetCategory.SPRITES -> Icons.Default.AutoAwesomeMotion
   AssetCategory.MODELS_3D -> Icons.Default.ViewInAr
+  AssetCategory.TRAINERS -> Icons.Default.Person
   AssetCategory.TEXTURES -> Icons.Default.Texture
   AssetCategory.TILESETS -> Icons.Default.GridOn
   AssetCategory.CHIPS_SHADERS -> Icons.Default.Memory
@@ -1003,6 +1035,7 @@ private fun categoryIcon(category: AssetCategory): ImageVector = when (category)
 private fun categoryAccentColor(category: AssetCategory): Color = when (category) {
   AssetCategory.SPRITES -> CyberCyan
   AssetCategory.MODELS_3D -> VoxelViolet
+  AssetCategory.TRAINERS -> SuperFxGold
   AssetCategory.TEXTURES -> Mode7Sky
   AssetCategory.TILESETS -> SgbEmerald
   AssetCategory.CHIPS_SHADERS -> SuperFxGold

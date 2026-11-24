@@ -9,8 +9,8 @@ data class FanGameProject(
   val activeChipsCsv: String = "SHOVEL_KNIGHT_CURATED|ALL_ON_RECORD",
   val pixel3dBlendRatio: Long = 65L,
   val dexCount: Long = 1025L,
-  val mapCount: Long = 14L,
-  val versionTag: String = "v4.0.0-PRISM",
+  val mapCount: Long = 22L,
+  val versionTag: String = "v5.0.0-PRISM",
   val createdAtMs: Long = System.currentTimeMillis(),
   val updatedAtMs: Long = System.currentTimeMillis(),
 )
@@ -60,6 +60,7 @@ data class CustomStudioAsset(
 enum class AssetCategory(val id: String, val label: String, val badge: String) {
   SPRITES("sprites", "Sprites", "2D+HD"),
   MODELS_3D("models_3d", "3D Models", "VOX+POLY"),
+  TRAINERS("trainers", "Trainers", "2D+3D"),
   TEXTURES("textures", "Textures", "PBR+TEX"),
   TILESETS("tilesets", "Tilesets", "MODE-7"),
   CHIPS_SHADERS("chips", "Chips & Shaders", "ASIC+FX"),

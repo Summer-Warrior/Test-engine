@@ -17,84 +17,46 @@ import com.example.engine.StatusCondition
 import org.json.JSONObject
 
 object StudioViewModelHelpers {
-  private val atlasIndexByDex: Map<Int, AtlasSpeciesIndexItem> by lazy {
-    NationalAtlasIndex.buildCompleteIndex().associateBy { it.dexNumber }
-  }
-
   fun parsePokemonType(raw: String): PokemonType =
     PokemonType.entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } ?: PokemonType.NORMAL
 
   /**
-   * Clean-room synthesis of any #0001-#1025 National Dex species from NationalAtlasIndex so
-   * `findPokemonByDex(dexNumber)` NEVER falls back to Bulbasaur for uncached encounters.
+   * Clean-room offline synthesis of any #0001-#1025 Resonance Atlas species using rich
+   * metadata (original name, epithet, dual types, archetype base stats, ability, signature move).
    */
   fun synthesizePokemonFromAtlas(dexNumber: Int): NativePokemonEntity {
     val safeDex = dexNumber.coerceIn(1, NationalAtlasIndex.TOTAL_NATIONAL_SPECIES)
-    val item = atlasIndexByDex[safeDex]
-    val (gen, _, regionName) = NationalAtlasIndex.regionForDex(safeDex)
-    val name = item?.name ?: "Species #${safeDex.toString().padStart(4, '0')}"
-    val type1 = item?.primaryType ?: "Normal"
-    val type2 = item?.secondaryType.orEmpty()
-    val roleTier = item?.resonanceRoleTier ?: NationalAtlasIndex.roleTierForDex(safeDex)
-    val primaryHex = item?.primaryHex ?: NationalAtlasIndex.hexForType(type1)
-    val secondaryHex = if (type2.isNotBlank()) NationalAtlasIndex.hexForType(type2) else "#00F5D4"
-
-    val stats = when (roleTier) {
-      "Legendary / Mythical" -> intArrayOf(102, 114, 96, 118, 98, 102)
-      "Paradox / Ultra" -> intArrayOf(94, 112, 92, 108, 90, 102)
-      "Regional Ace" -> intArrayOf(88, 104, 86, 100, 86, 96)
-      "Starter" -> intArrayOf(80, 88, 82, 92, 84, 86)
-      else -> intArrayOf(74, 82, 74, 82, 74, 78)
-    }
-    val hp = stats[0]
-    val atk = stats[1]
-    val def = stats[2]
-    val spa = stats[3]
-    val spd = stats[4]
-    val spe = stats[5]
-
-    val signatureMove = when (parsePokemonType(type1)) {
-      PokemonType.FIRE -> "Flare Burst"
-      PokemonType.WATER -> "Hydro Surge"
-      PokemonType.GRASS -> "Verdant Lance"
-      PokemonType.ELECTRIC -> "Volt Overdrive"
-      PokemonType.PSYCHIC -> "Astral Pulse"
-      PokemonType.DRAGON -> "Draco Resonance"
-      PokemonType.GHOST -> "Spectral Shift"
-      PokemonType.DARK -> "Eclipse Slash"
-      PokemonType.STEEL -> "Chrome Impact"
-      PokemonType.FAIRY -> "Prism Gleam"
-      PokemonType.ICE -> "Glacial Lance"
-      PokemonType.FIGHTING -> "Aura Strike"
-      PokemonType.GROUND -> "Tectonic Rift"
-      PokemonType.ROCK -> "Granite Crash"
-      PokemonType.BUG -> "Chitin Swarm"
-      PokemonType.POISON -> "Venom Nova"
-      PokemonType.FLYING -> "Gale Dive"
-      PokemonType.NORMAL -> "Hyper Resonance"
+    val item = NationalAtlasIndex.peekSpecies(safeDex)
+    val evoLink = item.evolvesToDex?.let { nextDex ->
+      " Evolves into #${nextDex.toString().padStart(4, '0')} ${NationalAtlasIndex.peekSpecies(nextDex).name}."
+    }.orEmpty()
+    val formsTag = if (item.availableForms.size > 1) {
+      " Alternate Forms: ${item.availableForms.drop(1).joinToString(", ") { it.shortTag }}."
+    } else {
+      ""
     }
 
     return NativePokemonEntity(
       dexNumber = safeDex,
-      name = name,
-      generation = item?.generation ?: gen,
-      region = item?.regionName ?: regionName,
-      primaryType = type1,
-      secondaryType = type2,
-      consoleOriginSystem = "Omni-Era Resonance Atlas ($gen)",
+      name = item.name,
+      generation = item.generation,
+      region = item.regionName,
+      primaryType = item.primaryType,
+      secondaryType = item.secondaryType,
+      consoleOriginSystem = "Omni-Era Resonance Atlas (${item.generation} • ${item.anatomy.label})",
       recommendedChipAddon = "All 156 Hardware Unified",
-      abilityPrimary = "Harmonic Sync",
+      abilityPrimary = item.signatureAbility,
       abilityHidden = "Prism Guard",
-      signatureMove = signatureMove,
-      loreSummary = "$name ($roleTier) from $regionName, synthesized cleanly from the Resonance Atlas Dex.",
-      baseHp = hp,
-      baseAttack = atk,
-      baseDefense = def,
-      baseSpAtk = spa,
-      baseSpDef = spd,
-      baseSpeed = spe,
-      primaryHex = primaryHex,
-      secondaryHex = secondaryHex,
+      signatureMove = item.signatureMove,
+      loreSummary = "${item.name}, the ${item.epithet} (${item.resonanceRoleTier}) from ${item.regionName}.$evoLink$formsTag",
+      baseHp = item.baseHp,
+      baseAttack = item.baseAttack,
+      baseDefense = item.baseDefense,
+      baseSpAtk = item.baseSpAtk,
+      baseSpDef = item.baseSpDef,
+      baseSpeed = item.baseSpeed,
+      primaryHex = item.primaryHex,
+      secondaryHex = item.secondaryHex,
       isUserModified = false,
     )
   }
@@ -260,7 +222,15 @@ object StudioViewModelHelpers {
       906, 907 -> if (norm == "grass") 908 else null
       909, 910 -> if (norm == "fire") 911 else null
       912, 913 -> if (norm == "water") 914 else null
-      else -> null
+      else -> {
+        val sp = NationalAtlasIndex.peekSpecies(currentDex)
+        val next = sp.evolvesToDex
+        if (next != null && (sp.primaryType.equals(norm, ignoreCase = true) || sp.secondaryType.equals(norm, ignoreCase = true))) {
+          next
+        } else {
+          null
+        }
+      }
     }
   }
 

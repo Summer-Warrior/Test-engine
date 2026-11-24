@@ -279,20 +279,13 @@ fun SpriteEditorSection(
           Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             OutlinedButton(
               onClick = {
-                scope.launch {
-                  val bmp = loadSoftwareBitmapFromUrl(context, activePokemon.pixelSpriteUrl)
-                  if (bmp != null) {
-                    onImportBitmap(bmp, "${activePokemon.name} PPU Sprite")
-                  } else {
-                    onLoadActiveSpeciesSeed()
-                  }
-                }
+                onLoadActiveSpeciesSeed()
               },
               modifier = Modifier.testTag("sprite_sample_active_button"),
             ) {
               Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = CyberCyan)
               Spacer(modifier = Modifier.width(4.dp))
-              Text("Sample", color = CyberCyan)
+              Text("Sample Rig", color = CyberCyan)
             }
             OutlinedButton(
               onClick = {

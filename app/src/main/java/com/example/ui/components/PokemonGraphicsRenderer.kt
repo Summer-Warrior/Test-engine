@@ -53,7 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import com.example.data.local.CreatureVariantForm
 import com.example.data.local.NativePokemonEntity
 import com.example.data.model.CharacterMixMode
 import com.example.data.model.ExtraVisualAudioSettings
@@ -61,6 +61,8 @@ import com.example.data.model.MasterDisciplineMode
 import com.example.engine.ConvergedAudioParams
 import com.example.engine.ConvergedVisualParams
 import com.example.engine.HardwareConvergenceSolver
+import com.example.engine.ProceduralCreatureRigEngine
+import com.example.engine.TimeOfDayCycle
 import com.example.ui.shaders.shovelKnightEntityEffect
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
@@ -92,6 +94,7 @@ fun MultiHardwareBattleStageBackdrop(
   visuals: ConvergedVisualParams,
   audio: ConvergedAudioParams,
   activePlatformIds: Set<String>,
+  timeOfDay: TimeOfDayCycle = TimeOfDayCycle.DAY,
   modifier: Modifier = Modifier,
 ) {
   val infinite = rememberInfiniteTransition(label = "multi_hw_stage_60fps")
@@ -120,6 +123,69 @@ fun MultiHardwareBattleStageBackdrop(
     val cx = w * 0.5f
     val cy = h * 0.50f
     val horizonY = h * (0.50f - visuals.affineWarp * 0.12f)
+
+    // 0. Day / Dusk / Night Atmospheric Sky Gradient & Celestial Disc
+    when (timeOfDay) {
+      TimeOfDayCycle.DAY -> {
+        drawRect(
+          brush = Brush.verticalGradient(
+            listOf(Color(0xFF0B1F3A), Color(0xFF153862), Color(0xFF0A1424)),
+          ),
+          size = Size(w, horizonY + 12f),
+        )
+        drawCircle(
+          brush = Brush.radialGradient(
+            listOf(SuperFxGold.copy(alpha = 0.40f), Color.Transparent),
+            center = Offset(w * 0.80f, h * 0.16f),
+            radius = h * 0.24f,
+          ),
+          center = Offset(w * 0.80f, h * 0.16f),
+          radius = h * 0.24f,
+        )
+      }
+      TimeOfDayCycle.DUSK -> {
+        drawRect(
+          brush = Brush.verticalGradient(
+            listOf(Color(0xFF2E1065), Color(0xFF9D174D), Color(0xFFEA580C)),
+          ),
+          size = Size(w, horizonY + 14f),
+        )
+        drawCircle(
+          brush = Brush.radialGradient(
+            listOf(Color(0xFFFDE047).copy(alpha = 0.82f), Color(0xFFF97316).copy(alpha = 0.28f), Color.Transparent),
+            center = Offset(cx, horizonY - 4f),
+            radius = h * 0.30f,
+          ),
+          center = Offset(cx, horizonY - 4f),
+          radius = h * 0.30f,
+        )
+      }
+      TimeOfDayCycle.NIGHT -> {
+        drawRect(
+          brush = Brush.verticalGradient(
+            listOf(Color(0xFF030712), Color(0xFF0F172A), Color(0xFF1E1B4B)),
+          ),
+          size = Size(w, horizonY + 14f),
+        )
+        // Twinkling night starfield + crescent moon
+        for (i in 0..16) {
+          val sx = ((i * 59 + 13) % 97) / 97f * w
+          val sy = ((i * 23 + 7) % 44) / 100f * h
+          val alpha = (0.35f + 0.55f * sin((pulsePhase * 6.283f + i).toDouble()).toFloat()).coerceIn(0.2f, 0.95f)
+          drawCircle(Color.White.copy(alpha = alpha), radius = if (i % 4 == 0) 2.2f else 1.3f, center = Offset(sx, sy))
+        }
+        drawCircle(
+          color = Color(0xFFE0F2FE).copy(alpha = 0.85f),
+          radius = h * 0.075f,
+          center = Offset(w * 0.82f, h * 0.16f),
+        )
+        drawCircle(
+          color = Color(0xFF080D1F),
+          radius = h * 0.062f,
+          center = Offset(w * 0.84f, h * 0.145f),
+        )
+      }
+    }
 
     // 1. N64 / HD-2D Volumetric Spotlights & Sunbeams
     if (visuals.volumetricRaysEnabled || "n64_rcp" in activePlatformIds) {
@@ -281,6 +347,7 @@ fun PokemonCharacterRenderer(
   hitFlash: Boolean = false,
   extraScaleX: Float = 1f,
   extraScaleY: Float = 1f,
+  variantForm: CreatureVariantForm = CreatureVariantForm.STANDARD,
 ) {
   val infinite = rememberInfiniteTransition(label = "pkmn_char_idle_${pokemon.dexNumber}")
   val rawCycleSec by infinite.animateFloat(
@@ -302,6 +369,7 @@ fun PokemonCharacterRenderer(
 
   val breathPhase = (0.5f + 0.5f * sin(steppedTimeSec * 2.1f)).coerceIn(0f, 1f)
   val orbitPhase = sin(steppedTimeSec * 1.05f)
+  val idleFrameIdx = if (breathPhase > 0.52f) 1 else 0
 
   val primaryAccent = parseHexColorSafe(pokemon.primaryHex, CyberCyan)
   val density = LocalDensity.current
@@ -317,6 +385,42 @@ fun PokemonCharacterRenderer(
 
   val customImageBitmap = remember(customSpriteBitmap) {
     customSpriteBitmap?.asImageBitmap()
+  }
+
+  val overridePrimary = if (pokemon.isUserModified) pokemon.primaryHex else null
+  val overrideSecondary = if (pokemon.isUserModified) pokemon.secondaryHex else null
+
+  val procedural2dFrame0 = remember(pokemon.dexNumber, variantForm, overridePrimary, overrideSecondary) {
+    ProceduralCreatureRigEngine.renderSpriteBitmap32(
+      dexNumber = pokemon.dexNumber,
+      form = variantForm,
+      frameIndex = 0,
+      scale = 4,
+      customPrimaryHex = overridePrimary,
+      customSecondaryHex = overrideSecondary,
+    ).asImageBitmap()
+  }
+  val procedural2dFrame1 = remember(pokemon.dexNumber, variantForm, overridePrimary, overrideSecondary) {
+    ProceduralCreatureRigEngine.renderSpriteBitmap32(
+      dexNumber = pokemon.dexNumber,
+      form = variantForm,
+      frameIndex = 1,
+      scale = 4,
+      customPrimaryHex = overridePrimary,
+      customSecondaryHex = overrideSecondary,
+    ).asImageBitmap()
+  }
+  val activeProcedural2d = if (idleFrameIdx == 1) procedural2dFrame1 else procedural2dFrame0
+
+  val procedural3dVoxel = remember(pokemon.dexNumber, variantForm, overridePrimary, overrideSecondary) {
+    ProceduralCreatureRigEngine.renderCelVoxelModelBitmap(
+      dexNumber = pokemon.dexNumber,
+      form = variantForm,
+      yawDegrees = 22f,
+      scale = 4,
+      customPrimaryHex = overridePrimary,
+      customSecondaryHex = overrideSecondary,
+    ).asImageBitmap()
   }
 
   val effectiveMixMode = when {
@@ -381,25 +485,14 @@ fun PokemonCharacterRenderer(
             },
           contentAlignment = Alignment.Center,
         ) {
-          if (customImageBitmap != null) {
-            Image(
-              bitmap = customImageBitmap,
-              contentDescription = "${pokemon.name} Custom Pixel Sprite",
-              filterQuality = FilterQuality.None,
-              colorFilter = api24HitFlashFilter,
-              contentScale = ContentScale.Fit,
-              modifier = Modifier.fillMaxSize(),
-            )
-          } else {
-            AsyncImage(
-              model = pokemon.pixelSpriteUrl,
-              contentDescription = "${pokemon.name} Crisp HD-2D Sprite",
-              filterQuality = FilterQuality.None,
-              colorFilter = api24HitFlashFilter,
-              contentScale = ContentScale.Fit,
-              modifier = Modifier.fillMaxSize(),
-            )
-          }
+          Image(
+            bitmap = customImageBitmap ?: activeProcedural2d,
+            contentDescription = "${pokemon.name} Crisp HD-2D Procedural Sprite",
+            filterQuality = FilterQuality.None,
+            colorFilter = api24HitFlashFilter,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+          )
         }
       }
 
@@ -417,10 +510,10 @@ fun PokemonCharacterRenderer(
             },
           contentAlignment = Alignment.Center,
         ) {
-          AsyncImage(
-            model = pokemon.home3dRenderUrl,
-            contentDescription = "${pokemon.name} Pixel-Locked 3D Cel Model",
-            filterQuality = FilterQuality.High,
+          Image(
+            bitmap = procedural3dVoxel,
+            contentDescription = "${pokemon.name} Offline 3D Cel-Voxel Model",
+            filterQuality = FilterQuality.None,
             colorFilter = api24HitFlashFilter,
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize(),
@@ -429,9 +522,19 @@ fun PokemonCharacterRenderer(
       }
 
       CharacterMixMode.VOXELIZER_FX_3D -> {
-        val sliceCount = visuals.voxelSliceCount.coerceIn(6, 14)
+        val sliceCount = visuals.voxelSliceCount.coerceIn(6, 12)
         val depthSpreadDp = (extrusionDepth.coerceIn(0.2f, 1f) * 14f)
         val yawRad = orbitPhase * 0.55f * facingSign
+        val voxelSlices = remember(pokemon.dexNumber, variantForm, sliceCount, overridePrimary, overrideSecondary) {
+          ProceduralCreatureRigEngine.renderVoxelSliceBitmaps(
+            dexNumber = pokemon.dexNumber,
+            form = variantForm,
+            sliceCount = sliceCount,
+            scale = 3,
+            customPrimaryHex = overridePrimary,
+            customSecondaryHex = overrideSecondary,
+          ).map { it.asImageBitmap() }
+        }
 
         Box(
           modifier = Modifier
@@ -449,36 +552,25 @@ fun PokemonCharacterRenderer(
             val t = i.toFloat() / sliceCount.toFloat()
             val shiftX = (yawRad * depthSpreadDp * t).dp
             val shiftY = (depthSpreadDp * 0.35f * t).dp
-            val shade = (0.38f + (1f - t) * 0.42f).coerceIn(0.28f, 0.85f)
+            val shade = (0.42f + (1f - t) * 0.42f).coerceIn(0.30f, 0.88f)
             val sliceTint = Color(
-              red = (primaryAccent.red * 0.35f + 0.08f) * shade,
-              green = (primaryAccent.green * 0.35f + 0.10f) * shade,
-              blue = (primaryAccent.blue * 0.45f + 0.18f) * shade,
-              alpha = 0.92f,
+              red = (primaryAccent.red * 0.35f + 0.14f) * shade,
+              green = (primaryAccent.green * 0.35f + 0.16f) * shade,
+              blue = (primaryAccent.blue * 0.45f + 0.22f) * shade,
+              alpha = 0.94f,
             )
             val sliceModifier = Modifier
               .fillMaxSize()
               .offset(x = shiftX, y = shiftY)
 
-            if (customImageBitmap != null) {
-              Image(
-                bitmap = customImageBitmap,
-                contentDescription = null,
-                filterQuality = FilterQuality.None,
-                colorFilter = ColorFilter.tint(sliceTint, BlendMode.Modulate),
-                contentScale = ContentScale.Fit,
-                modifier = sliceModifier,
-              )
-            } else {
-              AsyncImage(
-                model = pokemon.pixelSpriteUrl,
-                contentDescription = null,
-                filterQuality = FilterQuality.None,
-                colorFilter = ColorFilter.tint(sliceTint, BlendMode.Modulate),
-                contentScale = ContentScale.Fit,
-                modifier = sliceModifier,
-              )
-            }
+            Image(
+              bitmap = customImageBitmap ?: voxelSlices.getOrElse(i) { procedural2dFrame0 },
+              contentDescription = null,
+              filterQuality = FilterQuality.None,
+              colorFilter = ColorFilter.tint(sliceTint, BlendMode.Modulate),
+              contentScale = ContentScale.Fit,
+              modifier = sliceModifier,
+            )
           }
 
           Box(
@@ -486,25 +578,14 @@ fun PokemonCharacterRenderer(
               .fillMaxSize()
               .then(entityShaderModifier),
           ) {
-            if (customImageBitmap != null) {
-              Image(
-                bitmap = customImageBitmap,
-                contentDescription = "${pokemon.name} 3D Voxelized Custom Sprite",
-                filterQuality = FilterQuality.None,
-                colorFilter = api24HitFlashFilter,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-              )
-            } else {
-              AsyncImage(
-                model = pokemon.pixelSpriteUrl,
-                contentDescription = "${pokemon.name} 3D Voxelized Sprite",
-                filterQuality = FilterQuality.None,
-                colorFilter = api24HitFlashFilter,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-              )
-            }
+            Image(
+              bitmap = customImageBitmap ?: activeProcedural2d,
+              contentDescription = "${pokemon.name} 3D Voxelized Procedural Rig",
+              filterQuality = FilterQuality.None,
+              colorFilter = api24HitFlashFilter,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
           }
         }
       }
@@ -532,8 +613,8 @@ fun PokemonCharacterRenderer(
               },
             contentAlignment = Alignment.Center,
           ) {
-            AsyncImage(
-              model = pokemon.pixelSpriteUrl,
+            Image(
+              bitmap = activeProcedural2d,
               contentDescription = "${pokemon.name} Split-Beam 2D Sprite",
               filterQuality = FilterQuality.None,
               colorFilter = api24HitFlashFilter,
@@ -559,10 +640,10 @@ fun PokemonCharacterRenderer(
               },
             contentAlignment = Alignment.Center,
           ) {
-            AsyncImage(
-              model = pokemon.home3dRenderUrl,
-              contentDescription = "${pokemon.name} Split-Beam 3D Model",
-              filterQuality = FilterQuality.High,
+            Image(
+              bitmap = procedural3dVoxel,
+              contentDescription = "${pokemon.name} Split-Beam 3D Cel-Voxel Rig",
+              filterQuality = FilterQuality.None,
               colorFilter = api24HitFlashFilter,
               contentScale = ContentScale.Fit,
               modifier = Modifier.fillMaxSize(),
@@ -590,6 +671,50 @@ fun PokemonCharacterRenderer(
       }
     }
   }
+}
+
+/**
+ * Reusable 100% offline creature thumbnail powered by ProceduralCreatureRigEngine.
+ * Replaces all external PokéAPI AsyncImage calls across Dex lists, sidebars, and overworld HUDs.
+ */
+@Composable
+fun ProceduralCreatureThumbnail(
+  dexNumber: Int,
+  contentDescription: String,
+  modifier: Modifier = Modifier,
+  form: CreatureVariantForm = CreatureVariantForm.STANDARD,
+  is3dModel: Boolean = false,
+  customPrimaryHex: String? = null,
+  customSecondaryHex: String? = null,
+) {
+  val imgBitmap = remember(dexNumber, form, is3dModel, customPrimaryHex, customSecondaryHex) {
+    if (is3dModel) {
+      ProceduralCreatureRigEngine.renderCelVoxelModelBitmap(
+        dexNumber = dexNumber,
+        form = form,
+        yawDegrees = 20f,
+        scale = 3,
+        customPrimaryHex = customPrimaryHex,
+        customSecondaryHex = customSecondaryHex,
+      ).asImageBitmap()
+    } else {
+      ProceduralCreatureRigEngine.renderSpriteBitmap32(
+        dexNumber = dexNumber,
+        form = form,
+        frameIndex = 0,
+        scale = 3,
+        customPrimaryHex = customPrimaryHex,
+        customSecondaryHex = customSecondaryHex,
+      ).asImageBitmap()
+    }
+  }
+  Image(
+    bitmap = imgBitmap,
+    contentDescription = contentDescription,
+    filterQuality = FilterQuality.None,
+    contentScale = ContentScale.Fit,
+    modifier = modifier,
+  )
 }
 
 fun DrawScope.drawPokemonBattlePlatform(
