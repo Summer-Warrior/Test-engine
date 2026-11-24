@@ -27,12 +27,18 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Backpack
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Checkroom
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Healing
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
@@ -46,8 +52,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -76,7 +80,10 @@ import com.example.data.model.MasterDisciplineMode
 import com.example.engine.BattleGimmickMode
 import com.example.engine.BattleMoveSpec
 import com.example.engine.BgmThemeId
+import com.example.engine.CampActivityType
 import com.example.engine.CampaignProgressionState
+import com.example.engine.ContestAppealSpec
+import com.example.engine.ContestCategory
 import com.example.engine.GameFeelFrameState
 import com.example.engine.HardwareRuntimePreset
 import com.example.engine.ImpactWeight
@@ -85,11 +92,15 @@ import com.example.engine.MoveDirection
 import com.example.engine.PoiInteractionKind
 import com.example.engine.PokemonType
 import com.example.engine.RegionPointOfInterest
+import com.example.engine.SideModeType
+import com.example.engine.SideModesSessionState
 import com.example.engine.StatStages
 import com.example.engine.StatusCondition
 import com.example.engine.StudioSfxType
 import com.example.engine.TerrainCondition
 import com.example.engine.TimeOfDayCycle
+import com.example.engine.TowerBpReward
+import com.example.engine.TrainerAppearanceConfig
 import com.example.engine.TrainerArchetype
 import com.example.engine.TrainerCatalogAndRigEngine
 import com.example.engine.TrainerCharacterSpec
@@ -116,12 +127,22 @@ import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
 import kotlin.math.abs
 
+private enum class GameTestHudPanel {
+  SIDE_MODES,
+  HARDWARE,
+  AUDIO,
+  REGIONS,
+  WARDROBE,
+  SUMMONER,
+  LOG,
+}
+
 /**
- * Full-Featured Playable Game Test Sandbox for Pokémon: Prism Resonance v4.0.
- * - Live Hardware Runtime Mode Dropdown (All 156 Hardware Ultimate Target Style, 10 Curated Combos + Custom Combo Builder, Category/Era Suites, All 156 Individual Purist, and 4s Hardware Tour)
- * - 14 unique custom 16x16 regions with 9x9 locked scrolling camera, live corner minimap, Sub-Zone banner, NPCs/POIs, Healing Plazas, and Region Warp Gates
- * - Shared MultiHardwareBattleStageBackdrop matching OmniConsoleFusionViewport live shaders & VFX
- * - Complete Battle Engine (priority/speed turn order, Counter-Shield chip, Weakness Policy stages, auto-switch on faint, TMs, Evolution Stones, Rare Candies, Revives, Berries)
+ * Playmat-First Playable Game Test Sandbox for Pokémon: Prism Resonance v5.0.
+ * - Immediately shows the Playable Overworld / Battle Stage + Controls + Active Party at the TOP.
+ * - Compact HUD launcher bar above the stage toggles collapsible drawers for Hardware Runtime,
+ *   Audio Console, 22-Region Atlas, Bag, Hero Wardrobe, Roster Summoner, and Combat Log.
+ * - Strictly isolates Hero custom pixel avatar from Creature custom sprites.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -171,11 +192,45 @@ fun GameTestSection(
   onSummonWildPokemon: (Int) -> Unit,
   onAddPokemonToParty: (Int) -> Unit,
   playerTrainer: TrainerCharacterSpec = TrainerCatalogAndRigEngine.defaultProtagonist,
+  playerCustomAvatarBitmap: Bitmap? = null,
+  useCustomPlayerAvatarBitmap: Boolean = false,
+  hydratedByDex: Map<Int, NativePokemonEntity> = emptyMap(),
+  onSelectProtagonistPreset: (TrainerCharacterSpec) -> Unit = {},
+  onUpdateProtagonistIdentity: (String, String) -> Unit = { _, _ -> },
+  onUpdateProtagonistAppearance: ((TrainerAppearanceConfig) -> TrainerAppearanceConfig) -> Unit = {},
+  onEditHeroInSpriteEditor: () -> Unit = {},
+  onToggleUseCustomPlayerAvatar: () -> Unit = {},
+  onSaveHeroToRoom: (TrainerCharacterSpec) -> Unit = {},
   onDismissVsBanner: () -> Unit = {},
   onToggleTrailingPartner: () -> Unit = {},
   onOpenTrainerStudio: () -> Unit = {},
   onToggleAmbientBed: () -> Unit = {},
   onPlaySfx: (StudioSfxType) -> Unit = {},
+  sideModesState: SideModesSessionState = SideModesSessionState(),
+  onSelectSideMode: (SideModeType) -> Unit = {},
+  onStartTowerGauntlet: () -> Unit = {},
+  onExecuteTowerMove: (BattleMoveSpec) -> Unit = {},
+  onSwitchTowerSlot: (Int) -> Unit = {},
+  onAdvanceTowerRound: () -> Unit = {},
+  onRedeemBpReward: (TowerBpReward) -> Unit = {},
+  onStartContest: (ContestCategory) -> Unit = {},
+  onPerformContestAppeal: (ContestAppealSpec) -> Unit = {},
+  onStepSnapFrame: () -> Unit = {},
+  onTossSnapIlluminaOrb: () -> Unit = {},
+  onTossSnapApple: () -> Unit = {},
+  onNextSnapSubject: () -> Unit = {},
+  onCaptureSnapPhoto: () -> Unit = {},
+  onStartRiftDungeon: () -> Unit = {},
+  onStepRiftDirection: (Int, Int) -> Unit = { _, _ -> },
+  onUseRiftPrismPulse: () -> Unit = {},
+  onUseRiftOranBerry: () -> Unit = {},
+  onStepRangerWild: () -> Unit = {},
+  onBeginRangerDrag: (Float, Float) -> Unit = { _, _ -> },
+  onStepRangerDrag: (Float, Float) -> Unit = { _, _ -> },
+  onEndRangerDrag: () -> Unit = {},
+  onNextRangerTarget: () -> Unit = {},
+  onRecruitRangerTarget: () -> Unit = {},
+  onPerformCampActivity: (CampActivityType) -> Unit = {},
 ) {
   val haptics = LocalHapticFeedback.current
   val visuals = hardwareState.convergedVisuals
@@ -216,6 +271,13 @@ fun GameTestSection(
   }
   val nearbyPoi = activeChapter.pointsOfInterest.firstOrNull { poi ->
     abs(poi.col - gameState.playerCol) + abs(poi.row - gameState.playerRow) <= 1
+  }
+
+  // Playmat-First HUD Panel Drawer State (all collapsed by default so Playable Stage is #1!)
+  var activeHudPanel by remember { mutableStateOf<GameTestHudPanel?>(null) }
+  fun toggleHudPanel(panel: GameTestHudPanel) {
+    if (gameState.isBagOpen) onToggleBag(false)
+    activeHudPanel = if (activeHudPanel == panel) null else panel
   }
 
   // 60 FPS Universal Game Feel Engine Controller
@@ -263,197 +325,19 @@ fun GameTestSection(
     }
   }
 
-  Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    // 1. Live Hardware Runtime Mode Dropdown + 4-second Hardware Tour
-    GameTestHardwareRuntimeCard(
-      hardwareState = hardwareState,
-      onSelectPreset = onSelectHardwarePreset,
-      onApplyCustomCombo = onApplyCustomHardwareCombo,
-      onToggleHardwareTour = onToggleHardwareTour,
-    )
-
-    // 2. Live Pure-Kotlin Omni-Hardware Audio Console Bar
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    // 1. COMPACT PLAYMAT-FIRST HUD LAUNCHER BAR (Always visible, 1-tap toggle drawers)
     Card(
       modifier = Modifier
         .fillMaxWidth()
-        .border(1.dp, StudioBorderDark, RoundedCornerShape(16.dp)),
-      shape = RoundedCornerShape(16.dp),
-      colors = CardDefaults.cardColors(containerColor = StudioCardDark),
+        .border(1.dp, StudioBorderDark, RoundedCornerShape(14.dp))
+        .testTag("game_test_hud_launcher_bar"),
+      shape = RoundedCornerShape(14.dp),
+      colors = CardDefaults.cardColors(containerColor = StudioSurfaceDark),
     ) {
       Column(
-        modifier = Modifier.padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.weight(1f),
-          ) {
-            Icon(Icons.Default.MusicNote, contentDescription = null, tint = SuperFxGold, modifier = Modifier.size(18.dp))
-            Column {
-              Text(
-                text = "OMNI-HARDWARE 44.1kHz DSP AUDIO • ${hardwareState.convergedAudio.audioSignatureLabel}",
-                style = MaterialTheme.typography.labelSmall,
-                color = SuperFxGold,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = "BGM (64-Step): ${audioState.activeBgmTheme.displayName}",
-                style = MaterialTheme.typography.labelMedium,
-                color = StudioTextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = buildString {
-                  append(audioState.activeBgmTheme.palette.label)
-                  append(" • ${audioState.activeBgmTheme.bpm.toInt()} BPM")
-                  if (audioState.bossClimaxActive) append(" • CLIMAX +10% OCTAVE")
-                  if (audioState.lowHpUrgencyActive) append(" • LOW-HP PULSE")
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = when {
-                  audioState.lowHpUrgencyActive -> ElectricCrimson
-                  audioState.bossClimaxActive -> SuperFxGold
-                  else -> CyberCyan
-                },
-                fontWeight = if (audioState.lowHpUrgencyActive || audioState.bossClimaxActive) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(
-              onClick = onToggleBgm,
-              modifier = Modifier.testTag("game_test_bgm_play_toggle"),
-            ) {
-              Icon(
-                imageVector = if (audioState.isBgmPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (audioState.isBgmPlaying) "Stop BGM" else "Play BGM",
-                tint = SgbEmerald,
-              )
-            }
-            IconButton(
-              onClick = onToggleMute,
-              modifier = Modifier.testTag("game_test_audio_mute_toggle"),
-            ) {
-              Icon(
-                imageVector = if (audioState.isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                contentDescription = if (audioState.isMuted) "Unmute Audio" else "Mute Audio",
-                tint = if (audioState.isMuted) ElectricCrimson else CyberCyan,
-              )
-            }
-          }
-        }
-
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          BgmThemeId.entries.forEach { theme ->
-            val selected = audioState.activeBgmTheme == theme
-            FilterChip(
-              selected = selected,
-              onClick = { onSelectBgmTheme(theme) },
-              label = { Text(theme.displayName, style = MaterialTheme.typography.labelSmall) },
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = SuperFxGold.copy(alpha = 0.22f),
-                selectedLabelColor = SuperFxGold,
-              ),
-              modifier = Modifier.testTag("bgm_theme_${theme.id}"),
-            )
-          }
-        }
-
-        // Ambient Bed Toggle + Clean-Room SFX Audition Row ("!" Alert, Warp Swoosh, Evolution Chime)
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          val regionBedLabel = activeChapter.resolveAmbientBed().label
-          FilterChip(
-            selected = audioState.ambientBedEnabled,
-            onClick = onToggleAmbientBed,
-            label = {
-              Text(
-                text = if (audioState.ambientBedEnabled) "Ambient: $regionBedLabel" else "Ambient: Off",
-                style = MaterialTheme.typography.labelSmall,
-              )
-            },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = SgbEmerald.copy(alpha = 0.22f),
-              selectedLabelColor = SgbEmerald,
-            ),
-            modifier = Modifier.testTag("game_test_ambient_bed_toggle"),
-          )
-          FilterChip(
-            selected = false,
-            onClick = { onPlaySfx(StudioSfxType.TRAINER_EYE_CONTACT) },
-            label = { Text("SFX: '!' Alert", style = MaterialTheme.typography.labelSmall, color = ElectricCrimson) },
-            modifier = Modifier.testTag("sfx_audition_trainer_alert"),
-          )
-          FilterChip(
-            selected = false,
-            onClick = { onPlaySfx(StudioSfxType.DOOR_WARP_SWOOSH) },
-            label = { Text("SFX: Warp", style = MaterialTheme.typography.labelSmall, color = VoxelViolet) },
-            modifier = Modifier.testTag("sfx_audition_warp_swoosh"),
-          )
-          FilterChip(
-            selected = false,
-            onClick = { onPlaySfx(StudioSfxType.EVOLUTION_CHIME) },
-            label = { Text("SFX: Evolve", style = MaterialTheme.typography.labelSmall, color = SuperFxGold) },
-            modifier = Modifier.testTag("sfx_audition_evolution_chime"),
-          )
-        }
-
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          Text("Vol ${(audioState.masterVolume * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary)
-          Slider(
-            value = audioState.masterVolume,
-            onValueChange = onSetVolume,
-            colors = SliderDefaults.colors(thumbColor = CyberCyan, activeTrackColor = CyberCyan),
-            modifier = Modifier
-              .weight(1f)
-              .testTag("game_test_volume_slider"),
-          )
-          OutlinedButton(
-            onClick = { onPlayLeadCry(leadEntity) },
-            modifier = Modifier.testTag("game_test_cry_button"),
-          ) {
-            Text("Cry #${leadEntity.dexNumber}", color = CyberCyan)
-          }
-        }
-      }
-    }
-
-    // 3. 22-Region Fusion World Switcher, Atmospheric Lighting & View Controls
-    Card(
-      modifier = Modifier
-        .fillMaxWidth()
-        .border(1.dp, StudioBorderDark, RoundedCornerShape(16.dp)),
-      shape = RoundedCornerShape(16.dp),
-      colors = CardDefaults.cardColors(containerColor = StudioCardDark),
-    ) {
-      Column(
-        modifier = Modifier.padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -462,238 +346,271 @@ fun GameTestSection(
         ) {
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "POKÉMON: PRISM RESONANCE • ${campaignState.harmonicShardsCollected}/${MasterCanonTemplateCatalog.worldChapters.size} HARMONIC SHARDS",
+              text = "${activeChapter.regionName.substringAfter(". ").substringBefore(" —")} • ${campaignState.harmonicShardsCollected}/${MasterCanonTemplateCatalog.worldChapters.size} Shards • ${visuals.activeCount} HW",
               style = MaterialTheme.typography.labelSmall,
               color = CyberCyan,
               fontWeight = FontWeight.Bold,
-            )
-            Text(
-              text = "${activeChapter.regionName} • ${activeChapter.biomeStyle.label}",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-              color = StudioTextPrimary,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
             Text(
-              text = "${activeChapter.landmarkSilhouette.label} • ${activeChapter.fusionSourcesLineage}",
+              text = "${playerTrainer.name} • Lead: ${leadEntity.name} Lv.$leadLevel • ${gameState.timeOfDay.label}",
               style = MaterialTheme.typography.labelSmall,
               color = StudioTextSecondary,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
           }
-          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedButton(
-              onClick = { onToggleBag(null) },
-              modifier = Modifier.testTag("game_test_open_bag_button"),
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+              onClick = onToggleBgm,
+              modifier = Modifier.size(40.dp).testTag("hud_quick_bgm_toggle"),
             ) {
-              Icon(Icons.Default.Backpack, contentDescription = null, modifier = Modifier.size(16.dp), tint = SuperFxGold)
-              Spacer(modifier = Modifier.width(4.dp))
-              Text("Bag", color = SuperFxGold)
+              Icon(
+                imageVector = if (audioState.isBgmPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (audioState.isBgmPlaying) "Pause BGM" else "Play BGM",
+                tint = SgbEmerald,
+                modifier = Modifier.size(20.dp),
+              )
             }
-            OutlinedButton(
+            IconButton(
+              onClick = onToggleMute,
+              modifier = Modifier.size(40.dp).testTag("hud_quick_mute_toggle"),
+            ) {
+              Icon(
+                imageVector = if (audioState.isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                contentDescription = if (audioState.isMuted) "Unmute Audio" else "Mute Audio",
+                tint = if (audioState.isMuted) ElectricCrimson else CyberCyan,
+                modifier = Modifier.size(19.dp),
+              )
+            }
+            IconButton(
               onClick = onHealParty,
-              modifier = Modifier.testTag("game_test_heal_party_button"),
+              modifier = Modifier.size(40.dp).testTag("game_test_heal_party_button"),
             ) {
-              Icon(Icons.Default.Healing, contentDescription = "Heal Full Party", modifier = Modifier.size(16.dp), tint = SgbEmerald)
-            }
-          }
-        }
-
-        // Day / Dusk / Night Lighting Cycle + Full 16x16 / Sub-Zones / 22-Region World Atlas Toggles
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          TimeOfDayCycle.entries.forEach { cycle ->
-            FilterChip(
-              selected = gameState.timeOfDay == cycle,
-              onClick = { onSelectTimeOfDay(cycle) },
-              label = { Text(cycle.label, style = MaterialTheme.typography.labelSmall) },
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = SuperFxGold.copy(alpha = 0.22f),
-                selectedLabelColor = SuperFxGold,
-              ),
-              modifier = Modifier.testTag("time_of_day_${cycle.id}"),
-            )
-          }
-          FilterChip(
-            selected = gameState.showFullRegionView,
-            onClick = onToggleFullRegionView,
-            label = { Text(if (gameState.showFullRegionView) "Full 16×16 Region" else "9×9 Zoom Cam", style = MaterialTheme.typography.labelSmall) },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = SgbEmerald.copy(alpha = 0.22f),
-              selectedLabelColor = SgbEmerald,
-            ),
-            modifier = Modifier.testTag("toggle_full_region_view"),
-          )
-          FilterChip(
-            selected = gameState.showSubZoneLabels,
-            onClick = onToggleSubZoneLabels,
-            label = { Text("Sub-Zones", style = MaterialTheme.typography.labelSmall) },
-            modifier = Modifier.testTag("toggle_sub_zone_labels"),
-          )
-          FilterChip(
-            selected = gameState.showWorldAtlas,
-            onClick = onToggleWorldAtlas,
-            label = { Text("22-Region Atlas", style = MaterialTheme.typography.labelSmall) },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = VoxelViolet.copy(alpha = 0.26f),
-              selectedLabelColor = VoxelViolet,
-            ),
-            modifier = Modifier.testTag("toggle_world_atlas_button"),
-          )
-        }
-
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          MasterCanonTemplateCatalog.worldChapters.forEach { ch ->
-            val selected = ch.id == activeChapter.id
-            val cleared = ch.id in campaignState.completedChapterIds
-            FilterChip(
-              selected = selected,
-              onClick = { onSelectRegion(ch.id) },
-              label = {
-                Text(
-                  text = (if (cleared) "★ " else "") + ch.regionName.substringAfter(". ").substringBefore(" —"),
-                  style = MaterialTheme.typography.labelSmall,
-                )
-              },
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = CyberCyan.copy(alpha = 0.22f),
-                selectedLabelColor = CyberCyan,
-              ),
-              modifier = Modifier.testTag("playtest_region_${ch.id}"),
-            )
-          }
-        }
-      }
-    }
-
-    // 3b. Optional Full 22-Region Drawn World Atlas (shows ALL 22 drawn 16x16 regions + warp network)
-    if (gameState.showWorldAtlas) {
-      FullRegionsWorldAtlasCanvas(
-        activeRegionId = activeChapter.id,
-        completedRegionIds = campaignState.completedChapterIds,
-        timeOfDay = gameState.timeOfDay,
-        onSelectRegion = { targetId ->
-          onSelectRegion(targetId)
-        },
-      )
-    }
-
-    // 4. Interactive Bag Drawer Panel (All categories functional: Balls, Medicine, Hold, Berries, TMs, Evolution, Catalysts, Key Items)
-    if (gameState.isBagOpen) {
-      Card(
-        modifier = Modifier
-          .fillMaxWidth()
-          .border(1.5.dp, SuperFxGold.copy(alpha = 0.65f), RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = StudioSurfaceDark),
-      ) {
-        Column(
-          modifier = Modifier.padding(12.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Text(
-              text = "TRAINER BAG • TARGET: ${leadEntity.name} (Lv.$leadLevel)",
-              style = MaterialTheme.typography.labelSmall,
-              color = SuperFxGold,
-              fontWeight = FontWeight.Bold,
-            )
-            OutlinedButton(onClick = { onToggleBag(false) }, modifier = Modifier.testTag("game_test_close_bag_button")) {
-              Text("Close Bag", color = StudioTextPrimary)
-            }
-          }
-
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            StudioItemCatalog.allCategories.forEach { (catId, catLabel) ->
-              FilterChip(
-                selected = gameState.selectedBagCategory == catId,
-                onClick = { onSelectBagCategory(catId) },
-                label = { Text(catLabel, style = MaterialTheme.typography.labelSmall) },
-                modifier = Modifier.testTag("bag_category_$catId"),
+              Icon(
+                imageVector = Icons.Default.Healing,
+                contentDescription = "Heal Full Party",
+                tint = SgbEmerald,
+                modifier = Modifier.size(19.dp),
               )
             }
           }
+        }
 
-          val catItems = studioItems.filter { it.category == gameState.selectedBagCategory }
-          catItems.forEach { item ->
-            val accent = parseHexColorSafe(item.accentHex, CyberCyan)
-            val reusable = item.category in setOf(
-              StudioItemCatalog.CAT_HOLD_ITEM,
-              StudioItemCatalog.CAT_GIMMICK_CATALYST,
-              StudioItemCatalog.CAT_TM,
-              StudioItemCatalog.CAT_KEY_ITEM,
-            )
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(StudioCardDark)
-                .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = if (reusable) item.name else "${item.name}  ×${item.quantity}",
-                  style = MaterialTheme.typography.labelLarge,
-                  color = StudioTextPrimary,
-                  fontWeight = FontWeight.Bold,
-                )
-                Text(
-                  text = item.description,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = StudioTextSecondary,
-                  maxLines = 2,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-              Spacer(modifier = Modifier.width(8.dp))
-              Button(
-                onClick = { onUseBagItem(item) },
-                enabled = item.quantity > 0 || reusable,
-                colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = StudioDeepNavy),
-                modifier = Modifier.testTag("bag_use_${item.id}"),
-              ) {
-                Text(
-                  text = when (item.category) {
-                    StudioItemCatalog.CAT_POKE_BALL -> "Throw"
-                    StudioItemCatalog.CAT_HOLD_ITEM -> "Equip"
-                    StudioItemCatalog.CAT_GIMMICK_CATALYST -> "Trigger"
-                    StudioItemCatalog.CAT_TM -> "Teach"
-                    StudioItemCatalog.CAT_EVOLUTION -> "Evolve"
-                    else -> "Use"
-                  },
-                  fontWeight = FontWeight.Bold,
-                )
-              }
-            }
-          }
+        // Scrollable Collapsible Drawer Toggle Chips
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.SIDE_MODES,
+            onClick = { toggleHudPanel(GameTestHudPanel.SIDE_MODES) },
+            leadingIcon = { Icon(Icons.Default.EmojiEvents, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Side Modes", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SuperFxGold.copy(alpha = 0.28f), selectedLabelColor = SuperFxGold),
+            modifier = Modifier.testTag("hud_toggle_side_modes"),
+          )
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.REGIONS,
+            onClick = { toggleHudPanel(GameTestHudPanel.REGIONS) },
+            leadingIcon = { Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("22 Regions", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CyberCyan.copy(alpha = 0.22f), selectedLabelColor = CyberCyan),
+            modifier = Modifier.testTag("hud_toggle_regions"),
+          )
+          FilterChip(
+            selected = gameState.isBagOpen,
+            onClick = {
+              activeHudPanel = null
+              onToggleBag(null)
+            },
+            leadingIcon = { Icon(Icons.Default.Backpack, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Bag", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SuperFxGold.copy(alpha = 0.24f), selectedLabelColor = SuperFxGold),
+            modifier = Modifier.testTag("game_test_open_bag_button"),
+          )
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.WARDROBE,
+            onClick = { toggleHudPanel(GameTestHudPanel.WARDROBE) },
+            leadingIcon = { Icon(Icons.Default.Checkroom, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Wardrobe", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SuperFxGold.copy(alpha = 0.24f), selectedLabelColor = SuperFxGold),
+            modifier = Modifier.testTag("hud_toggle_wardrobe"),
+          )
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.SUMMONER,
+            onClick = { toggleHudPanel(GameTestHudPanel.SUMMONER) },
+            leadingIcon = { Icon(Icons.Default.Groups, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Summoner", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = VoxelViolet.copy(alpha = 0.26f), selectedLabelColor = VoxelViolet),
+            modifier = Modifier.testTag("hud_toggle_summoner"),
+          )
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.HARDWARE,
+            onClick = { toggleHudPanel(GameTestHudPanel.HARDWARE) },
+            leadingIcon = { Icon(Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Hardware", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SgbEmerald.copy(alpha = 0.22f), selectedLabelColor = SgbEmerald),
+            modifier = Modifier.testTag("hud_toggle_hardware"),
+          )
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.AUDIO,
+            onClick = { toggleHudPanel(GameTestHudPanel.AUDIO) },
+            leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Audio", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SuperFxGold.copy(alpha = 0.22f), selectedLabelColor = SuperFxGold),
+            modifier = Modifier.testTag("hud_toggle_audio"),
+          )
+          FilterChip(
+            selected = activeHudPanel == GameTestHudPanel.LOG,
+            onClick = { toggleHudPanel(GameTestHudPanel.LOG) },
+            leadingIcon = { Icon(Icons.Default.ReceiptLong, contentDescription = null, modifier = Modifier.size(15.dp)) },
+            label = { Text("Log (${gameState.battleLog.size})", style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CyberCyan.copy(alpha = 0.22f), selectedLabelColor = CyberCyan),
+            modifier = Modifier.testTag("hud_toggle_log"),
+          )
         }
       }
     }
 
-    // 5. Interactive NPC / POI Dialogue Card with High-Contrast 40x40 Character Portrait
+    // 2. COLLAPSIBLE HUD DRAWER SLOT (Renders right above the playmat only when toggled open)
+    if (gameState.isBagOpen) {
+      GameTestBagDrawerCard(
+        leadEntity = leadEntity,
+        leadLevel = leadLevel,
+        selectedCategory = gameState.selectedBagCategory,
+        studioItems = studioItems,
+        onCloseBag = { onToggleBag(false) },
+        onSelectCategory = onSelectBagCategory,
+        onUseBagItem = onUseBagItem,
+      )
+    } else {
+      when (activeHudPanel) {
+        GameTestHudPanel.SIDE_MODES -> SideModesHubSection(
+          session = sideModesState,
+          activeChapter = activeChapter,
+          timeOfDay = gameState.timeOfDay,
+          partyDexIds = gameState.activePartyDexIds,
+          bondGauge = gameState.bondGauge,
+          is3dCelModel = fusionConfig.pixelTo3dBlend >= 0.5f,
+          resolvePokemonByDex = resolvePokemonByDex,
+          onCloseHub = { activeHudPanel = null },
+          onSelectMode = onSelectSideMode,
+          onStartTowerGauntlet = onStartTowerGauntlet,
+          onExecuteTowerMove = onExecuteTowerMove,
+          onSwitchTowerSlot = onSwitchTowerSlot,
+          onAdvanceTowerRound = onAdvanceTowerRound,
+          onRedeemBpReward = onRedeemBpReward,
+          onStartContest = onStartContest,
+          onPerformContestAppeal = onPerformContestAppeal,
+          onStepSnapFrame = onStepSnapFrame,
+          onTossSnapIlluminaOrb = onTossSnapIlluminaOrb,
+          onTossSnapApple = onTossSnapApple,
+          onNextSnapSubject = onNextSnapSubject,
+          onCaptureSnapPhoto = onCaptureSnapPhoto,
+          onStartRiftDungeon = onStartRiftDungeon,
+          onStepRiftDirection = onStepRiftDirection,
+          onUseRiftPrismPulse = onUseRiftPrismPulse,
+          onUseRiftOranBerry = onUseRiftOranBerry,
+          onStepRangerWild = onStepRangerWild,
+          onBeginRangerDrag = onBeginRangerDrag,
+          onStepRangerDrag = onStepRangerDrag,
+          onEndRangerDrag = onEndRangerDrag,
+          onNextRangerTarget = onNextRangerTarget,
+          onRecruitRangerTarget = onRecruitRangerTarget,
+          onPerformCampActivity = onPerformCampActivity,
+        )
+        GameTestHudPanel.HARDWARE -> GameTestHardwareRuntimeCard(
+          hardwareState = hardwareState,
+          onSelectPreset = onSelectHardwarePreset,
+          onApplyCustomCombo = onApplyCustomHardwareCombo,
+          onToggleHardwareTour = onToggleHardwareTour,
+        )
+        GameTestHudPanel.AUDIO -> GameTestAudioConsoleCard(
+          hardwareState = hardwareState,
+          audioState = audioState,
+          activeChapter = activeChapter,
+          leadEntity = leadEntity,
+          onToggleBgm = onToggleBgm,
+          onSelectBgmTheme = onSelectBgmTheme,
+          onToggleMute = onToggleMute,
+          onSetVolume = onSetVolume,
+          onPlayLeadCry = onPlayLeadCry,
+          onToggleAmbientBed = onToggleAmbientBed,
+          onPlaySfx = onPlaySfx,
+        )
+        GameTestHudPanel.REGIONS -> GameTestRegionAtlasPanel(
+          gameState = gameState,
+          campaignState = campaignState,
+          activeChapter = activeChapter,
+          onSelectRegion = onSelectRegion,
+          onSelectTimeOfDay = onSelectTimeOfDay,
+          onToggleFullRegionView = onToggleFullRegionView,
+          onToggleSubZoneLabels = onToggleSubZoneLabels,
+          onToggleWorldAtlas = onToggleWorldAtlas,
+        )
+        GameTestHudPanel.WARDROBE -> ProtagonistWardrobePanel(
+          playerTrainer = playerTrainer,
+          playerCustomAvatarBitmap = playerCustomAvatarBitmap,
+          useCustomPlayerAvatarBitmap = useCustomPlayerAvatarBitmap,
+          onSelectProtagonistPreset = onSelectProtagonistPreset,
+          onUpdateProtagonistIdentity = onUpdateProtagonistIdentity,
+          onUpdateProtagonistAppearance = onUpdateProtagonistAppearance,
+          onEditHeroInSpriteEditor = onEditHeroInSpriteEditor,
+          onToggleUseCustomPlayerAvatar = onToggleUseCustomPlayerAvatar,
+          onSaveHeroToRoom = { onSaveHeroToRoom(playerTrainer) },
+          compact = true,
+        )
+        GameTestHudPanel.SUMMONER -> GameTestTrainersAndDexPanel(
+          activeChapter = activeChapter,
+          activePartyDexIds = gameState.activePartyDexIds,
+          hydratedByDex = hydratedByDex,
+          onChallengeTrainer = {
+            activeHudPanel = null
+            onChallengeTrainer(it)
+          },
+          onSummonWildPokemon = {
+            activeHudPanel = null
+            onSummonWildPokemon(it)
+          },
+          onAddPokemonToParty = onAddPokemonToParty,
+        )
+        GameTestHudPanel.LOG -> Card(
+          modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, StudioBorderDark, RoundedCornerShape(14.dp))
+            .testTag("game_test_combat_log_panel"),
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(containerColor = StudioSurfaceDark),
+        ) {
+          Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              text = "PRISM RESONANCE COMBAT & EXPLORATION LOG",
+              style = MaterialTheme.typography.labelSmall,
+              color = CyberCyan,
+              fontWeight = FontWeight.Bold,
+            )
+            gameState.battleLog.take(8).forEachIndexed { idx, line ->
+              Text(
+                text = "• $line",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (idx == 0) StudioTextPrimary else StudioTextSecondary,
+              )
+            }
+          }
+        }
+        null -> Unit
+      }
+    }
+
+    // 3. CONTEXTUAL NPC DIALOGUE / WARP GATE BANNERS (Appear immediately above Playmat when triggered)
     gameState.activeDialoguePoi?.let { poi ->
       val npcTrainer = remember(poi.id, activeChapter.id) {
         TrainerCatalogAndRigEngine.resolveTrainerForPoi(poi, activeChapter.id)
@@ -765,7 +682,6 @@ fun GameTestSection(
       }
     }
 
-    // 6. Region Warp Gate Picker Card
     if (gameState.showWarpGatePicker) {
       Card(
         modifier = Modifier
@@ -818,7 +734,7 @@ fun GameTestSection(
       }
     }
 
-    // 7. Main Playable Stage (9x9 Scrolling Overworld OR Shared Multi-Hardware Battle Arena)
+    // 4. MAIN PLAYABLE STAGE (Playmat-First: Overworld OR Shared Multi-Hardware Battle Arena)
     BoxWithConstraints(
       modifier = Modifier
         .fillMaxWidth()
@@ -848,7 +764,7 @@ fun GameTestSection(
               modifier = Modifier.padding(14.dp),
               verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-              // Sub-Zone Banner
+              // Sub-Zone Banner + Wild / Boss Encounter Quick Buttons
               Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -889,6 +805,7 @@ fun GameTestSection(
                 }
               }
 
+              // Quick Overworld Companion & Hero Strip
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
@@ -901,7 +818,7 @@ fun GameTestSection(
                   onClick = onToggleTrailingPartner,
                   label = {
                     Text(
-                      text = if (gameState.showTrailingPartner) "Trailing Partner: ON" else "Trailing Partner: OFF",
+                      text = if (gameState.showTrailingPartner) "Partner: ON" else "Partner: OFF",
                       style = MaterialTheme.typography.labelSmall,
                     )
                   },
@@ -912,16 +829,28 @@ fun GameTestSection(
                   modifier = Modifier.testTag("toggle_trailing_partner_chip"),
                 )
                 FilterChip(
-                  selected = false,
-                  onClick = onOpenTrainerStudio,
+                  selected = activeHudPanel == GameTestHudPanel.WARDROBE,
+                  onClick = { toggleHudPanel(GameTestHudPanel.WARDROBE) },
                   label = {
                     Text(
-                      text = "Hero: ${playerTrainer.name} (Customize)",
+                      text = "Hero: ${playerTrainer.name} (Wardrobe)",
                       style = MaterialTheme.typography.labelSmall,
                       color = SuperFxGold,
                     )
                   },
                   modifier = Modifier.testTag("open_hero_customizer_chip"),
+                )
+                FilterChip(
+                  selected = false,
+                  onClick = onOpenTrainerStudio,
+                  label = {
+                    Text(
+                      text = "3D Studio",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = CyberCyan,
+                    )
+                  },
+                  modifier = Modifier.testTag("open_trainer_3d_studio_chip"),
                 )
               }
 
@@ -953,7 +882,8 @@ fun GameTestSection(
                 trailingPartnerRow = gameState.prevPlayerRow,
                 trailingPartnerCol = gameState.prevPlayerCol,
                 playerDexNumber = leadEntity.dexNumber,
-                playerCustomBitmap = if (useCustomSprite) customSpriteBitmap else null,
+                playerCustomBitmap = if (useCustomPlayerAvatarBitmap) playerCustomAvatarBitmap else null,
+                trailingPartnerCustomBitmap = if (useCustomSprite) customSpriteBitmap else null,
                 testTagPrefix = "game_test_overworld_canvas",
               )
 
@@ -1063,7 +993,6 @@ fun GameTestSection(
               val leadAccent = parseHexColorSafe(leadEntity.primaryHex, CyberCyan)
               val enemyAccent = parseHexColorSafe(enemyEntity.primaryHex, ElectricCrimson)
 
-              // Dramatic Trainer VS Intro Banner on Trainer/Rival/Boss Battles
               if (gameState.showTrainerVsBanner && gameState.activeEnemyTrainer != null) {
                 TrainerVsBannerOverlay(
                   playerTrainer = playerTrainer,
@@ -1085,7 +1014,6 @@ fun GameTestSection(
                   )
                   .border(1.dp, StudioBorderDark, RoundedCornerShape(14.dp)),
               ) {
-                // Shared Live Multi-Hardware Backdrop (responds to Hardware Runtime Dropdown + Day/Dusk/Night!)
                 MultiHardwareBattleStageBackdrop(
                   primaryColor = leadAccent,
                   secondaryColor = enemyAccent,
@@ -1100,7 +1028,6 @@ fun GameTestSection(
                     .fillMaxSize()
                     .padding(10.dp),
                 ) {
-                  // Enemy HUD + Multi-Creature Trainer Party Orb Strip (Top Left)
                   val enemyStageBadge = if (gameState.enemyAtkStage > 0) "ATK+${gameState.enemyAtkStage}" else null
                   val enemyRoleBadge = when {
                     gameState.activeEnemyTrainer != null -> {
@@ -1144,7 +1071,6 @@ fun GameTestSection(
                     }
                   }
 
-                  // Enemy Trainer 2D/3D Rig standing beside their active creature during Trainer/Boss battles
                   gameState.activeEnemyTrainer?.let { enemyTrainerSpec ->
                     TrainerCharacterRenderer(
                       trainer = enemyTrainerSpec,
@@ -1159,7 +1085,6 @@ fun GameTestSection(
                     )
                   }
 
-                  // Enemy Creature Renderer (Top Right, offset slightly inward when Enemy Trainer stands beside them)
                   PokemonCharacterRenderer(
                     pokemon = enemyEntity,
                     style = PokemonGraphicsStyle.HYBRID_FUSION,
@@ -1177,19 +1102,19 @@ fun GameTestSection(
                       .graphicsLayer { translationX = feelFrame.enemyRecoilOffsetPx },
                   )
 
-                  // Playable Hero Trainer Rig standing behind the player's active partner
+                  // Playable Hero Trainer Rig (supports isolated custom pixel hero avatar!)
                   TrainerCharacterRenderer(
                     trainer = playerTrainer,
                     pose = if (gameState.turnNumber <= 1) TrainerPose.CAPSULE_THROW else TrainerPose.BATTLE_IDLE,
                     characterMixMode = hardwareState.characterMixMode,
                     visuals = visuals,
+                    customAvatarBitmap = if (useCustomPlayerAvatarBitmap) playerCustomAvatarBitmap else null,
                     modifier = Modifier
                       .align(Alignment.BottomStart)
                       .offset(x = (-6).dp, y = 2.dp)
                       .size(68.dp),
                   )
 
-                  // Player Creature Renderer (Bottom Left)
                   PokemonCharacterRenderer(
                     pokemon = leadEntity,
                     style = PokemonGraphicsStyle.HYBRID_FUSION,
@@ -1209,7 +1134,6 @@ fun GameTestSection(
                       .graphicsLayer { translationX = feelFrame.playerLungeOffsetPx },
                   )
 
-                  // Player HUD (Bottom Right) showing live level, held item / stat stage boosts, & Bond Gauge
                   val stageNote = buildString {
                     if (gameState.playerAtkStage > 0) append("ATK+${gameState.playerAtkStage} ")
                     if (leadHeldItem.isNotBlank()) append(leadHeldItem.replace("_", " ").uppercase())
@@ -1306,7 +1230,7 @@ fun GameTestSection(
                 }
               }
 
-              // 2x2 Canonical Move Command Grid (Slot 4 updates dynamically when teaching a TM!)
+              // 2x2 Canonical Move Command Grid
               Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 moveset.take(2).forEach { move ->
                   Button(
@@ -1370,7 +1294,31 @@ fun GameTestSection(
       }
     }
 
-    // 8. Active 6-Slot Party Bar (with Levels & KO status)
+    // 5. LIVE 1-LINE TICKER OF LATEST EVENT (Tap Log chip above for full history)
+    gameState.battleLog.firstOrNull()?.let { latestLine ->
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(10.dp))
+          .background(StudioSurfaceDark)
+          .border(1.dp, StudioBorderDark, RoundedCornerShape(10.dp))
+          .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Text("LOG", style = MaterialTheme.typography.labelSmall, color = CyberCyan, fontWeight = FontWeight.Bold)
+        Text(
+          text = latestLine,
+          style = MaterialTheme.typography.bodySmall,
+          color = StudioTextPrimary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f),
+        )
+      }
+    }
+
+    // 6. ACTIVE 6-SLOT PARTY STRIP (Immediately below playmat for fast switching)
     Card(
       modifier = Modifier
         .fillMaxWidth()
@@ -1415,43 +1363,6 @@ fun GameTestSection(
               modifier = Modifier.testTag("party_slot_$idx"),
             )
           }
-        }
-      }
-    }
-
-    // 8b. Interactive 57-Class Trainer Roster & All 1,025 Pokémon Summoner
-    GameTestTrainersAndDexPanel(
-      activeChapter = activeChapter,
-      activePartyDexIds = gameState.activePartyDexIds,
-      onChallengeTrainer = onChallengeTrainer,
-      onSummonWildPokemon = onSummonWildPokemon,
-      onAddPokemonToParty = onAddPokemonToParty,
-    )
-
-    // 9. Live Battle & Adventure Log
-    Card(
-      modifier = Modifier
-        .fillMaxWidth()
-        .border(1.dp, StudioBorderDark, RoundedCornerShape(14.dp)),
-      shape = RoundedCornerShape(14.dp),
-      colors = CardDefaults.cardColors(containerColor = StudioSurfaceDark),
-    ) {
-      Column(
-        modifier = Modifier.padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-      ) {
-        Text(
-          text = "PRISM RESONANCE COMBAT & EXPLORATION LOG",
-          style = MaterialTheme.typography.labelSmall,
-          color = CyberCyan,
-          fontWeight = FontWeight.Bold,
-        )
-        gameState.battleLog.take(6).forEachIndexed { idx, line ->
-          Text(
-            text = "• $line",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (idx == 0) StudioTextPrimary else StudioTextSecondary,
-          )
         }
       }
     }

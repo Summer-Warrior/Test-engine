@@ -263,7 +263,7 @@ object TrainerCatalogAndRigEngine {
       defeatQuote = "Remarkable data! Your Prism Resonance frequency is off the charts!",
       dialogueLines = listOf(
         "The Harmonic Fracture linked all 22 regions across games, anime, and manga.",
-        "Heal anytime at a Plaza and inspect Trainers in the Omni-Console Viewport!",
+        "Rest anytime at a Town Plaza and review partner profiles in the Prism Trainer Dossier!",
       ),
       appearance = TrainerAppearanceConfig(
         skinHex = "#FDE2CC", hairHex = "#0EA5E9", outfitPrimaryHex = "#F8FAFC",
@@ -1089,6 +1089,34 @@ object TrainerCatalogAndRigEngine {
       }
     }
 
+    // 4b. Companion Pose Flourish (0 = Standard, 1 = Prism Scarf & Wrist Gauntlet, 2 = Champion Crest & Shoulder Clasp)
+    when (app.companionPoseIndex.coerceIn(0, 2)) {
+      1 -> {
+        // Flowing accent scarf / resonance gauntlet
+        if (!isSide) {
+          fillRect(11, 13, 10, 2, 9, 7)
+          fillRect(20, 14, 3, 4, 10, 7)
+          put(22, 18, 9, 7)
+        } else {
+          fillRect(13, 13, 6, 2, 9, 7)
+          fillRect(if (isFacingLeft) 18 else 11, 14, 3, 4, 10, 7)
+        }
+      }
+      2 -> {
+        // Elevated Champion shoulder pauldrons & glowing Prism crest
+        if (!isSide) {
+          fillRect(8, 13, 4, 2, 10, 7)
+          fillRect(20, 13, 4, 2, 10, 7)
+          put(15, 16, 14, 7); put(16, 16, 14, 7)
+          put(24, 11, 10, 7)
+        } else {
+          fillRect(12, 13, 8, 2, 10, 7)
+          put(15, 16, 14, 7)
+        }
+      }
+      else -> Unit
+    }
+
     // 5. Head, Face, Hair & Expressions
     val headX = if (isSide) 12 else 11
     val headW = if (isSide) 8 else 10
@@ -1403,12 +1431,12 @@ object TrainerCatalogAndRigEngine {
   // ANDROID BITMAP & 3D CEL-VOXEL CHARACTER MODEL RENDERERS (LRU CACHED)
   // =========================================================================
 
-  private val bitmapCache = object : LinkedHashMap<String, Bitmap>(96, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean = size > 128
+  private val bitmapCache = object : LinkedHashMap<String, Bitmap>(160, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean = size > 256
   }
 
   private fun appearanceKey(spec: TrainerCharacterSpec): String = with(spec.appearance) {
-    "${spec.id}|$skinHex|$hairHex|$outfitPrimaryHex|$outfitSecondaryHex|$accentHex|${headgear.name}|${outfitStyle.name}|$hairStyleIndex"
+    "${spec.id}|$skinHex|$hairHex|$outfitPrimaryHex|$outfitSecondaryHex|$accentHex|${headgear.name}|${outfitStyle.name}|$hairStyleIndex|$companionPoseIndex"
   }
 
   fun renderTrainerSpriteBitmap(
@@ -1511,7 +1539,8 @@ object TrainerCatalogAndRigEngine {
   }
 
   /**
-   * Produces stacked multi-slice depth Bitmaps for true 3D Voxelizer-FX parallax rotation in Compose.
+   * Produces cached multi-slice depth Bitmaps for true 3D Voxelizer-FX parallax rotation in Compose.
+   * Zero per-recomposition Bitmap allocations once cached in bitmapCache.
    */
   fun renderTrainerVoxelSlices(
     spec: TrainerCharacterSpec,
@@ -1519,11 +1548,29 @@ object TrainerCatalogAndRigEngine {
     sliceCount: Int = 7,
     scale: Int = 3,
   ): List<Bitmap> {
+    val safeSlices = sliceCount.coerceIn(3, 14)
+    val safeScale = scale.coerceIn(1, 6)
+    val appKey = appearanceKey(spec)
+    val cached = synchronized(bitmapCache) {
+      val existing = ArrayList<Bitmap>(safeSlices)
+      var allPresent = true
+      for (slice in 0 until safeSlices) {
+        val hit = bitmapCache["voxslice|$appKey|${pose.name}|$safeSlices|$safeScale|$slice"]
+        if (hit == null) {
+          allPresent = false
+          break
+        }
+        existing.add(hit)
+      }
+      if (allPresent) existing else null
+    }
+    if (cached != null) return cached
+
     val matrix = generateTrainerSpriteMatrix(spec, pose, 0)
-    val outW = matrix.width * scale
-    val outH = matrix.height * scale
-    return (0 until sliceCount).map { slice ->
-      val shade = 0.68f + (slice.toFloat() / (sliceCount - 1).coerceAtLeast(1)) * 0.36f
+    val outW = matrix.width * safeScale
+    val outH = matrix.height * safeScale
+    val generated = (0 until safeSlices).map { slice ->
+      val shade = 0.68f + (slice.toFloat() / (safeSlices - 1).coerceAtLeast(1)) * 0.36f
       val outPixels = IntArray(outW * outH)
       for (y in 0 until matrix.height) {
         for (x in 0 until matrix.width) {
@@ -1532,15 +1579,77 @@ object TrainerCatalogAndRigEngine {
           val d = matrix.depthMap[pos].toInt()
           if (idx >= 0 && slice <= d) {
             val argb = if (idx == 0) matrix.paletteArgb[0].toInt() else shadeArgb(matrix.paletteArgb[idx], shade).toInt()
-            for (sy in 0 until scale) {
-              val rowOff = (y * scale + sy) * outW + x * scale
-              for (sx in 0 until scale) outPixels[rowOff + sx] = argb
+            for (sy in 0 until safeScale) {
+              val rowOff = (y * safeScale + sy) * outW + x * safeScale
+              for (sx in 0 until safeScale) outPixels[rowOff + sx] = argb
             }
           }
         }
       }
       Bitmap.createBitmap(outPixels, outW, outH, Bitmap.Config.ARGB_8888)
     }
+    synchronized(bitmapCache) {
+      generated.forEachIndexed { slice, bmp ->
+        bitmapCache["voxslice|$appKey|${pose.name}|$safeSlices|$safeScale|$slice"] = bmp
+      }
+    }
+    return generated
+  }
+
+  /**
+   * Downsamples the Player Trainer's 32x32 sprite (walk frames 0 & 1) into a crisp 16x16
+   * 8-color PPU sprite sheet ready for direct pixel editing inside SpriteEditorSection.
+   */
+  fun sampleTrainerToSpriteEditor16(spec: TrainerCharacterSpec): Pair<List<String>, List<List<Int>>> {
+    val app = spec.appearance
+    val editorPalette = listOf(
+      "#0E1125", // 0: crisp ink outline
+      app.outfitPrimaryHex.ifBlank { "#00E5FF" }, // 1: outfit primary
+      app.outfitSecondaryHex.ifBlank { "#1E293B" }, // 2: outfit secondary
+      app.accentHex.ifBlank { "#FFB300" }, // 3: accent / headgear emblem
+      app.skinHex.ifBlank { "#F6D0B1" }, // 4: skin tone
+      app.hairHex.ifBlank { "#1E293B" }, // 5: hair
+      "#FFFFFF", // 6: highlights / eyes
+      "#EF4444", // 7: Prism capsule crimson
+    )
+    // Map 15-color Trainer palette slots -> 8-color Sprite Editor palette slots
+    fun mapTrainerSlot(slot: Int): Int = when (slot) {
+      0 -> 0
+      1, 2 -> 4
+      3, 4 -> 5
+      5, 6 -> 1
+      7, 8 -> 2
+      9, 10, 11, 14 -> 3
+      12 -> 6
+      13 -> 7
+      else -> 1
+    }
+
+    val frames = listOf(0, 1).map { walkIdx ->
+      val mat = generateTrainerSpriteMatrix(spec, TrainerPose.OVERWORLD_DOWN, walkIdx)
+      List(SpritePixelMatrixEngine.PIXEL_COUNT) { idx16 ->
+        val x16 = idx16 % SpritePixelMatrixEngine.GRID_SIZE
+        val y16 = idx16 / SpritePixelMatrixEngine.GRID_SIZE
+        val sx = x16 * 2
+        val sy = y16 * 2
+        val samples = listOf(
+          mat.pixels[sy * 32 + sx],
+          mat.pixels[sy * 32 + sx + 1],
+          mat.pixels[(sy + 1) * 32 + sx],
+          mat.pixels[(sy + 1) * 32 + sx + 1],
+        ).filter { it >= 0 }
+        if (samples.isEmpty()) {
+          -1
+        } else {
+          // Prioritize eyes/accent/skin over outline when downsampling 2x2 block
+          val chosen = samples.firstOrNull { it == 12 || it == 13 || it == 14 }
+            ?: samples.firstOrNull { it != 0 }
+            ?: 0
+          mapTrainerSlot(chosen)
+        }
+      }
+    }
+    return editorPalette to frames
   }
 
   fun renderTrainerPortraitBitmap(spec: TrainerCharacterSpec, scale: Int = 4): Bitmap {

@@ -279,7 +279,7 @@ private fun DrawnRegionMiniCard(
     )
     Text(
       text = "${chapter.orderIndex}/22 · ${speciesCount}pk",
-      style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+      style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
       color = StudioTextSecondary,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,

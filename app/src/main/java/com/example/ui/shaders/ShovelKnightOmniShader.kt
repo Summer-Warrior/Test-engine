@@ -35,6 +35,7 @@ object ShovelKnightOmniShader {
     uniform float bayerStrength;
     uniform float rimStrength;
     uniform float crystalGlint;
+    uniform float vertexSnap;
     uniform float timeSec;
     uniform float hitFlash;
 
@@ -52,7 +53,9 @@ object ShovelKnightOmniShader {
 
     half4 main(float2 fragCoord) {
       float2 res = max(resolution, float2(1.0, 1.0));
-      float grid = clamp(virtualGrid, 48.0, 220.0);
+      float baseGrid = clamp(virtualGrid, 48.0, 220.0);
+      float snap = clamp(vertexSnap, 0.0, 1.0);
+      float grid = mix(baseGrid, max(44.0, baseGrid * 0.65), snap);
       float2 stepPx = res / grid;
       float2 cell = floor(fragCoord / stepPx);
       float2 snapped = (cell + 0.5) * stepPx;
@@ -96,6 +99,25 @@ object ShovelKnightOmniShader {
       float3 highlightTint = float3(1.06, 1.03, 0.95);
       celRgb *= mix(shadowTint, highlightTint, clamp(qLuma, 0.0, 1.0));
 
+      // Subtle Tokusatsu clearcoat highlight sheen on bright cel highlights
+      if (qLuma > 0.85) {
+        float coatBand = smoothstep(0.85, 1.0, qLuma);
+        float sheenWave = 0.72 + 0.28 * sin(timeSec * 2.0 + cell.x * 0.14 - cell.y * 0.10);
+        celRgb += float3(0.18, 0.22, 0.25) * coatBand * sheenWave * (0.65 + rimStrength * 0.35);
+      }
+
+      // Angled 45-degree screen-space comic shadow halftone dots in deep shadow bands
+      if (qLuma < 0.34) {
+        float2 rotCell = float2(
+          cell.x * 0.7071 - cell.y * 0.7071,
+          cell.x * 0.7071 + cell.y * 0.7071
+        );
+        float2 dotUv = fract(rotCell * 0.5) - 0.5;
+        float dotMask = smoothstep(0.26, 0.16, length(dotUv));
+        float shadowDepth = (0.34 - qLuma) * 0.42 * (0.55 + bayerStrength * 0.45);
+        celRgb *= (1.0 - dotMask * shadowDepth);
+      }
+
       // 1-texel directional top-left rim light
       if (rimStrength > 0.05 && (aL < 0.30 || aU < 0.30)) {
         celRgb += float3(0.24, 0.42, 0.48) * rimStrength;
@@ -132,6 +154,7 @@ object ShovelKnightOmniShader {
       shader.setFloatUniform("bayerStrength", visuals.bayerDither.coerceIn(0f, 1f))
       shader.setFloatUniform("rimStrength", visuals.rimLight.coerceIn(0f, 1f))
       shader.setFloatUniform("crystalGlint", crystalGlint.coerceIn(0f, 1f))
+      shader.setFloatUniform("vertexSnap", visuals.vertexSnap.coerceIn(0f, 1f))
       shader.setFloatUniform("timeSec", timeSec)
       shader.setFloatUniform("hitFlash", if (hitFlash) 1f else 0f)
       RenderEffect.createRuntimeShaderEffect(shader, "content").asComposeRenderEffect()

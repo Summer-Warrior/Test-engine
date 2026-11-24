@@ -91,8 +91,9 @@ interface NativePokemonDao {
     CustomDexRoomEntity::class,
     CustomAssetRoomEntity::class,
     CustomTrainerEntity::class,
+    SideModeRecordEntity::class,
   ],
-  version = 5,
+  version = 6,
   exportSchema = false,
 )
 abstract class NativePokemonDatabase : RoomDatabase() {
@@ -365,6 +366,31 @@ abstract class NativePokemonDatabase : RoomDatabase() {
       }
     }
 
+    val MIGRATION_5_6 = object : Migration(5, 6) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS `side_mode_records` (
+            `projectId` TEXT NOT NULL PRIMARY KEY,
+            `battleTowerBestStreak` INTEGER NOT NULL,
+            `battleTowerCurrentStreak` INTEGER NOT NULL,
+            `battlePoints` INTEGER NOT NULL,
+            `contestRibbonsWon` INTEGER NOT NULL,
+            `contestBestScore` INTEGER NOT NULL,
+            `bestSnapScore` INTEGER NOT NULL,
+            `bestSnapStarRating` INTEGER NOT NULL,
+            `bestSnapCaption` TEXT NOT NULL,
+            `deepestRiftFloor` INTEGER NOT NULL,
+            `riftGuardiansDefeated` INTEGER NOT NULL,
+            `rangerCapturesCompleted` INTEGER NOT NULL,
+            `campMealsServed` INTEGER NOT NULL,
+            `updatedAtEpochMs` INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+      }
+    }
+
     fun getInstance(context: Context): NativePokemonDatabase {
       return INSTANCE ?: synchronized(this) {
         INSTANCE ?: Room.databaseBuilder(
@@ -372,7 +398,7 @@ abstract class NativePokemonDatabase : RoomDatabase() {
           NativePokemonDatabase::class.java,
           "pokefusion_native_dex.db",
         )
-          .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+          .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
           .build()
           .also { INSTANCE = it }
       }

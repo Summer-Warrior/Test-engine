@@ -186,7 +186,7 @@ fun ProjectDashboard(
             value = when (cloudGamesState) {
               is UiState.Loading -> "Loading..."
               is UiState.Error -> "Notice"
-              is UiState.Success -> "Offline Room v4"
+              is UiState.Success -> "Offline Room v5"
             },
             accentColor = when (cloudGamesState) {
               is UiState.Loading -> SuperFxGold

@@ -76,6 +76,7 @@ data class AtlasSpeciesIndexItem(
   val signatureAbility: String,
   val signatureMove: String,
   val availableForms: List<CreatureVariantForm> = listOf(CreatureVariantForm.STANDARD),
+  val prismAlias: String = "",
 ) {
   val baseStatTotal: Int
     get() = baseHp + baseAttack + baseDefense + baseSpAtk + baseSpDef + baseSpeed
@@ -503,17 +504,54 @@ object NationalAtlasIndex {
     }
   }
 
-  /** Fast O(1) offline lookup for any #0001-#1025 species. */
+  private val canonicalBuiltInByDex: Map<Int, NativePokemonEntity> by lazy {
+    NativeFranchiseCatalogRepository.builtInFranchiseDex.associateBy { it.dexNumber }
+  }
+
+  private fun applyEntityOverlay(
+    base: AtlasSpeciesIndexItem,
+    entity: NativePokemonEntity,
+  ): AtlasSpeciesIndexItem {
+    val resolvedName = entity.name.ifBlank { base.name }
+    val preservedAlias = when {
+      base.prismAlias.isNotBlank() && !base.prismAlias.equals(resolvedName, ignoreCase = true) -> base.prismAlias
+      !base.name.equals(resolvedName, ignoreCase = true) -> base.name
+      else -> ""
+    }
+    return base.copy(
+      name = resolvedName,
+      prismAlias = preservedAlias,
+      primaryType = entity.primaryType.ifBlank { base.primaryType },
+      secondaryType = entity.secondaryType,
+      primaryHex = entity.primaryHex.ifBlank { base.primaryHex },
+      secondaryHex = entity.secondaryHex.ifBlank { base.secondaryHex },
+      baseHp = entity.baseHp,
+      baseAttack = entity.baseAttack,
+      baseDefense = entity.baseDefense,
+      baseSpAtk = entity.baseSpAtk,
+      baseSpDef = entity.baseSpDef,
+      baseSpeed = entity.baseSpeed,
+      signatureAbility = entity.abilityPrimary.ifBlank { base.signatureAbility },
+      signatureMove = entity.signatureMove.ifBlank { base.signatureMove },
+    )
+  }
+
+  /** Fast O(1) offline lookup for any #0001-#1025 species with unified canonical naming. */
   fun peekSpecies(dexNumber: Int): AtlasSpeciesIndexItem {
     val catalog = baseCatalog()
     val safe = dexNumber.coerceIn(1, catalog.size)
-    return catalog[safe - 1]
+    val base = catalog[safe - 1]
+    val canonical = canonicalBuiltInByDex[safe]
+    return if (canonical != null) applyEntityOverlay(base, canonical) else base
   }
 
   /** Returns all species belonging to the same evolutionary family. */
   fun evolutionFamilyFor(dexNumber: Int): List<AtlasSpeciesIndexItem> {
     val target = peekSpecies(dexNumber)
-    return baseCatalog().filter { it.familyId == target.familyId }.sortedBy { it.dexNumber }
+    return baseCatalog()
+      .filter { it.familyId == target.familyId }
+      .sortedBy { it.dexNumber }
+      .map { item -> canonicalBuiltInByDex[item.dexNumber]?.let { applyEntityOverlay(item, it) } ?: item }
   }
 
   /**
@@ -553,33 +591,17 @@ object NationalAtlasIndex {
   }
 
   /**
-   * Builds the full #0001-#1025 offline catalog instantly in memory.
-   * Preserves user-modified Room edits (custom palettes/stats/names) when `isUserModified = true`.
+   * Builds the full #0001-#1025 offline catalog instantly in memory with unified canonical naming:
+   * - Applies canonical built-in franchise entries first (storing any Prism epithet/alias in prismAlias)
+   * - Applies any hydrated or user-modified Room species entries on top so Battle, Viewport,
+   *   Atlas, and Summoner always display the exact same primary name for every Dex #.
    */
   fun buildCompleteIndex(hydratedByDex: Map<Int, NativePokemonEntity> = emptyMap()): List<AtlasSpeciesIndexItem> {
     val catalog = baseCatalog()
-    if (hydratedByDex.isEmpty()) return catalog
     return catalog.map { base ->
+      val afterBuiltIn = canonicalBuiltInByDex[base.dexNumber]?.let { applyEntityOverlay(base, it) } ?: base
       val hydrated = hydratedByDex[base.dexNumber]
-      if (hydrated != null && hydrated.isUserModified) {
-        base.copy(
-          name = hydrated.name.ifBlank { base.name },
-          primaryType = hydrated.primaryType.ifBlank { base.primaryType },
-          secondaryType = hydrated.secondaryType,
-          primaryHex = hydrated.primaryHex.ifBlank { base.primaryHex },
-          secondaryHex = hydrated.secondaryHex.ifBlank { base.secondaryHex },
-          baseHp = hydrated.baseHp,
-          baseAttack = hydrated.baseAttack,
-          baseDefense = hydrated.baseDefense,
-          baseSpAtk = hydrated.baseSpAtk,
-          baseSpDef = hydrated.baseSpDef,
-          baseSpeed = hydrated.baseSpeed,
-          signatureAbility = hydrated.abilityPrimary.ifBlank { base.signatureAbility },
-          signatureMove = hydrated.signatureMove.ifBlank { base.signatureMove },
-        )
-      } else {
-        base
-      }
+      if (hydrated != null) applyEntityOverlay(afterBuiltIn, hydrated) else afterBuiltIn
     }
   }
 

@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import coil.imageLoader
-import coil.request.ImageRequest
 import com.example.data.local.AtlasProgressEntity
 import com.example.data.local.AtlasSpeciesIndexItem
 import com.example.data.local.CampaignStateEntity
@@ -21,6 +19,7 @@ import com.example.data.local.NativePokemonEntity
 import com.example.data.local.ResourceCategory
 import com.example.data.local.SavedMapEntity
 import com.example.data.local.SavedSpriteEntity
+import com.example.data.local.SideModeRecordEntity
 import com.example.data.local.StudioItemCatalog
 import com.example.data.local.StudioItemEntity
 import com.example.data.local.StudioPersistenceDao
@@ -38,29 +37,40 @@ import com.example.engine.AmbientBedType
 import com.example.engine.AudioConvergenceSolver
 import com.example.engine.BattleGimmickMode
 import com.example.engine.BattleMoveSpec
+import com.example.engine.BattleTowerEngine
 import com.example.engine.BattleTurnField
 import com.example.engine.BgmThemeId
+import com.example.engine.CampActivityType
 import com.example.engine.CampaignProgressionState
 import com.example.engine.CanonBattleResolver
 import com.example.engine.CanonRegionChapter
+import com.example.engine.ContestAppealSpec
+import com.example.engine.ContestCategory
 import com.example.engine.DynamicBattleAudioState
 import com.example.engine.HardwareConvergenceSolver
 import com.example.engine.HardwarePlatformSpec
 import com.example.engine.HardwareRuntimePreset
 import com.example.engine.HardwareRuntimePresetCatalog
+import com.example.engine.LentalSnapEngine
 import com.example.engine.MasterCanonTemplateCatalog
 import com.example.engine.MoveDirection
+import com.example.engine.MysteryRiftEngine
 import com.example.engine.OmniHardwareAudioEngine
 import com.example.engine.PoiInteractionKind
 import com.example.engine.PokemonType
+import com.example.engine.PrismContestEngine
 import com.example.engine.ProceduralCreatureRigEngine
+import com.example.engine.RangerCampEngine
 import com.example.engine.RegionPointOfInterest
+import com.example.engine.SideModeType
+import com.example.engine.SideModesSessionState
 import com.example.engine.SpritePixelMatrixEngine
 import com.example.engine.StatStages
 import com.example.engine.StatusCondition
 import com.example.engine.StudioSfxType
 import com.example.engine.TerrainCondition
 import com.example.engine.TimeOfDayCycle
+import com.example.engine.TowerBpReward
 import com.example.engine.TrainerAiTactic
 import com.example.engine.TrainerAppearanceConfig
 import com.example.engine.TrainerArchetype
@@ -282,6 +292,10 @@ class StudioViewModel(
   private val _campaignState = MutableStateFlow(CampaignProgressionState())
   val campaignState: StateFlow<CampaignProgressionState> = _campaignState.asStateFlow()
 
+  // Hoisted 5-Mode Side Modes Hub state (persisted to Room v6 side_mode_records)
+  private val _sideModesState = MutableStateFlow(SideModesSessionState())
+  val sideModesState: StateFlow<SideModesSessionState> = _sideModesState.asStateFlow()
+
   private var hasAutoLoadedInitialProject = false
   private var battleActionCounter = 0
   private var hardwareTourJob: Job? = null
@@ -338,7 +352,7 @@ class StudioViewModel(
         initialValue = emptyMap(),
       )
 
-  // 100% Offline Room v4 Single-Source-of-Truth Project Stream
+  // 100% Offline Room v5 Single-Source-of-Truth Project Stream
   val cloudFanGamesState: StateFlow<UiState<List<FanGameProject>>> =
     localProjectRepository.observeProjects()
       .map<List<FanGameProject>, UiState<List<FanGameProject>>> { UiState.Success(it) }
@@ -542,6 +556,9 @@ class StudioViewModel(
         )
       }
 
+      // 4b. Restore Room v6 Side Modes records for active project
+      restoreSideModeRecordFromRoom(projectKey)
+
       // 5. Ensure all 14 custom 16x16 maps are saved (upgrading any legacy 8x8 maps seamlessly)
       val defaultMaps = MasterCanonTemplateCatalog.worldChapters.mapNotNull { ch ->
         val key = mapStorageKey(projectKey, ch.id)
@@ -602,11 +619,12 @@ class StudioViewModel(
     val levelsMap = StudioViewModelHelpers.parsePartyLevelsCsv(entity.partyLevelsCsv)
     val taughtMap = StudioViewModelHelpers.parseTaughtMovesCsv(entity.taughtMovesCsv)
     val badges = MasterCanonTemplateCatalog.worldChapters.filter { it.id in completed }.sumOf { it.gymOrTrialCount }
+    val contestRibbons = _sideModesState.value.record.contestRibbonsWon
     _campaignState.value = CampaignProgressionState(
       completedChapterIds = completed,
-      badgesEarned = badges.coerceAtMost(112),
-      animeRibbonsAndKeys = (completed.size * 2).coerceAtMost(42),
-      worldCoronationRank = (10000 - completed.size * 740).coerceAtLeast(1),
+      badgesEarned = badges.coerceAtMost(176),
+      animeRibbonsAndKeys = (completed.size * 2 + contestRibbons).coerceAtMost(99),
+      worldCoronationRank = (10000 - completed.size * 450).coerceAtLeast(1),
       harmonicShardsCollected = completed.size,
       partyDexIds = party,
     )
@@ -1190,13 +1208,19 @@ class StudioViewModel(
       val next = transform(prev)
       val safeIdx = next.activeFrameIndex.coerceIn(0, (next.frames.size - 1).coerceAtLeast(0))
       val fixed = next.copy(activeFrameIndex = safeIdx)
-      fixed.copy(
-        renderedPreviewBitmap = SpritePixelMatrixEngine.renderFrameToBitmap(
-          pixels = fixed.currentFrame,
-          paletteArgb = fixed.paletteArgb,
-          scale = 4,
-        )
+      val rendered = SpritePixelMatrixEngine.renderFrameToBitmap(
+        pixels = fixed.currentFrame,
+        paletteArgb = fixed.paletteArgb,
+        scale = 4,
       )
+      if (fixed.editingTarget == SpriteEditTarget.PLAYER_AVATAR) {
+        fixed.copy(
+          renderedPreviewBitmap = rendered,
+          playerCustomSpriteBitmap = rendered,
+        )
+      } else {
+        fixed.copy(renderedPreviewBitmap = rendered)
+      }
     }
   }
 
@@ -1321,7 +1345,11 @@ class StudioViewModel(
     updateSpriteStateWithBitmap { s ->
       val newUndo = (s.undoStack + listOf(s.currentFrame)).takeLast(24)
       val newFrames = s.frames.toMutableList().also { it[s.activeFrameIndex] = updatedFrame }
-      s.copy(frames = newFrames, undoStack = newUndo, useCustomBitmapInViewport = true)
+      if (s.editingTarget == SpriteEditTarget.PLAYER_AVATAR) {
+        s.copy(frames = newFrames, undoStack = newUndo, useCustomPlayerAvatarBitmap = true)
+      } else {
+        s.copy(frames = newFrames, undoStack = newUndo, useCustomBitmapInViewport = true)
+      }
     }
   }
 
@@ -1399,6 +1427,7 @@ class StudioViewModel(
         seedDexNumber = pokemon.dexNumber,
         spriteName = "${pokemon.name} Procedural Rig",
         activeSavedSpriteId = null,
+        editingTarget = SpriteEditTarget.CREATURE,
         paletteArgb = pal,
         frames = sampledFrames,
         activeFrameIndex = 0,
@@ -1408,9 +1437,67 @@ class StudioViewModel(
     _statusBannerMessage.value = "Sampled #${pokemon.dexNumber.toString().padStart(4, '0')} ${pokemon.name} procedural rig into 2-frame editable Sprite Editor!"
   }
 
+  /**
+   * Samples the active Player Trainer into SpriteEditorSection in dedicated PLAYER_AVATAR mode
+   * so user edits customize the Playable Hero Avatar without affecting creature rigs.
+   */
+  fun editHeroInSpriteEditor(openTab: Boolean = true) {
+    val hero = _playerTrainer.value
+    val (hexPalette, heroFrames) = TrainerCatalogAndRigEngine.sampleTrainerToSpriteEditor16(hero)
+    val argbPalette = hexPalette.map { hex ->
+      SpritePixelMatrixEngine.parseHexToArgbLong(hex, 0xFF00E5FFL)
+    }
+    updateSpriteStateWithBitmap { s ->
+      s.copy(
+        seedDexNumber = 0,
+        spriteName = "${hero.name} Hero Avatar",
+        activeSavedSpriteId = null,
+        editingTarget = SpriteEditTarget.PLAYER_AVATAR,
+        paletteArgb = argbPalette,
+        frames = heroFrames,
+        activeFrameIndex = 0,
+        undoStack = emptyList(),
+        useCustomPlayerAvatarBitmap = true,
+      )
+    }
+    if (openTab) {
+      _activeTab.value = StudioWorkspaceTab.SPRITE_EDITOR
+    }
+    audioEngine.playSfx(StudioSfxType.ITEM_USE)
+    _statusBannerMessage.value = "Loaded '${hero.name}' into Sprite Editor (Player Hero Avatar mode)!"
+  }
+
   fun toggleUseCustomSpriteInViewport() {
     _spriteEditorState.update { it.copy(useCustomBitmapInViewport = !it.useCustomBitmapInViewport) }
     audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun toggleUseCustomPlayerAvatarBitmap() {
+    val current = _spriteEditorState.value
+    if (!current.useCustomPlayerAvatarBitmap && current.playerCustomSpriteBitmap == null) {
+      editHeroInSpriteEditor(openTab = false)
+      return
+    }
+    _spriteEditorState.update { it.copy(useCustomPlayerAvatarBitmap = !it.useCustomPlayerAvatarBitmap) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun applyCurrentSpriteToPlayerAvatar() {
+    val s = _spriteEditorState.value
+    val bmp = s.renderedPreviewBitmap ?: SpritePixelMatrixEngine.renderFrameToBitmap(
+      pixels = s.currentFrame,
+      paletteArgb = s.paletteArgb,
+      scale = 4,
+    )
+    _spriteEditorState.update {
+      it.copy(
+        editingTarget = SpriteEditTarget.PLAYER_AVATAR,
+        playerCustomSpriteBitmap = bmp,
+        useCustomPlayerAvatarBitmap = true,
+      )
+    }
+    audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+    _statusBannerMessage.value = "Applied current 16x16 pixel art to Playable Hero Avatar!"
   }
 
   fun saveCurrentSpriteToRoomAndCloud() {
@@ -1419,8 +1506,11 @@ class StudioViewModel(
     val projectKey = activePersistenceProjectKey()
     val palJson = SpritePixelMatrixEngine.serializePaletteJson(s.paletteArgb)
     val framesJson = SpritePixelMatrixEngine.serializeFramesRleJson(s.frames)
-    val cleanName = s.spriteName.trim().ifBlank { "${_selectedPokemon.value.name} Custom Rig" }
-    val primaryHex = SpritePixelMatrixEngine.argbLongToHex(s.paletteArgb.getOrElse(0) { 0xFF00F5D4 })
+    val isHeroAvatar = s.editingTarget == SpriteEditTarget.PLAYER_AVATAR
+    val cleanName = s.spriteName.trim().ifBlank {
+      if (isHeroAvatar) "${_playerTrainer.value.name} Hero Avatar" else "${_selectedPokemon.value.name} Custom Rig"
+    }
+    val primaryHex = SpritePixelMatrixEngine.argbLongToHex(s.paletteArgb.getOrElse(0) { 0xFF00E5FF })
     val secondaryHex = SpritePixelMatrixEngine.argbLongToHex(s.paletteArgb.getOrElse(1) { 0xFFFF2A85 })
 
     viewModelScope.launch {
@@ -1429,7 +1519,7 @@ class StudioViewModel(
         id = spriteId,
         projectId = projectKey,
         name = cleanName,
-        spriteSeedId = s.seedDexNumber,
+        spriteSeedId = if (isHeroAvatar) 0 else s.seedDexNumber,
         paletteJson = palJson,
         framesRleJson = framesJson,
         frameCount = s.frames.size,
@@ -1438,43 +1528,56 @@ class StudioViewModel(
       withContext(Dispatchers.IO) {
         persistenceDao.upsertSavedSprite(entity)
       }
-      _spriteEditorState.update { it.copy(activeSavedSpriteId = spriteId, useCustomBitmapInViewport = true) }
+      _spriteEditorState.update {
+        if (isHeroAvatar) {
+          it.copy(activeSavedSpriteId = spriteId, useCustomPlayerAvatarBitmap = true)
+        } else {
+          it.copy(activeSavedSpriteId = spriteId, useCustomBitmapInViewport = true)
+        }
+      }
 
       val compactPayload = "RLE_SPRITE|ID:$spriteId|PAL:$primaryHex,$secondaryHex|F:${s.frames.size}|${SpritePixelMatrixEngine.encodeFrameRle(s.currentFrame)}".take(200)
       val localAsset = CustomStudioAsset(
         name = cleanName,
         category = AssetCategory.SPRITES.label,
-        consoleLineage = _selectedPokemon.value.consoleOriginSystem,
+        consoleLineage = if (isHeroAvatar) "Player Hero Avatar PPU" else _selectedPokemon.value.consoleOriginSystem,
         chipAddon = "PPU 16x16 Voxel Rig",
-        spriteSeedId = s.seedDexNumber.toLong(),
+        spriteSeedId = (if (isHeroAvatar) 25 else s.seedDexNumber).toLong(),
         shaderFormula = compactPayload,
         projectId = projectKey,
       )
       localProjectRepository.addStudioAsset(localAsset)
       _isSavingProject.value = false
       audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
-      _statusBannerMessage.value = "Saved '$cleanName' (${s.frames.size} frames) to Local Room Vault! Active in Viewport & Game Test."
+      _statusBannerMessage.value = if (isHeroAvatar) {
+        "Saved Hero Avatar '$cleanName' (${s.frames.size} frames) to Room v5! Active on Overworld & Trainer Stage."
+      } else {
+        "Saved Creature Rig '$cleanName' (${s.frames.size} frames) to Room v5! Active in Viewport & Game Test."
+      }
     }
   }
 
   fun loadSavedSpriteFromRoom(entity: SavedSpriteEntity) {
     val palette = SpritePixelMatrixEngine.deserializePaletteJson(entity.paletteJson)
+    val isHero = entity.spriteSeedId == 0
     val frames = SpritePixelMatrixEngine.deserializeFramesRleJson(entity.framesRleJson)
-      .ifEmpty { listOf(SpritePixelMatrixEngine.generateSeededFrame(entity.spriteSeedId, 0)) }
+      .ifEmpty { listOf(SpritePixelMatrixEngine.generateSeededFrame(entity.spriteSeedId.coerceAtLeast(1), 0)) }
     updateSpriteStateWithBitmap { s ->
       s.copy(
         seedDexNumber = entity.spriteSeedId,
         spriteName = entity.name,
         activeSavedSpriteId = entity.id,
+        editingTarget = if (isHero) SpriteEditTarget.PLAYER_AVATAR else SpriteEditTarget.CREATURE,
         paletteArgb = palette,
         frames = frames,
         activeFrameIndex = 0,
         undoStack = emptyList(),
-        useCustomBitmapInViewport = true,
+        useCustomBitmapInViewport = if (isHero) s.useCustomBitmapInViewport else true,
+        useCustomPlayerAvatarBitmap = if (isHero) true else s.useCustomPlayerAvatarBitmap,
       )
     }
     audioEngine.playSfx(StudioSfxType.ITEM_USE)
-    _statusBannerMessage.value = "Loaded saved sprite '${entity.name}' (${frames.size} frames) into Editor & 3D Voxel Viewport!"
+    _statusBannerMessage.value = "Loaded saved sprite '${entity.name}' (${frames.size} frames)!"
   }
 
   fun deleteSavedSpriteFromRoom(spriteId: String) {
@@ -1647,10 +1750,49 @@ class StudioViewModel(
   fun updateProtagonistAppearance(transform: (TrainerAppearanceConfig) -> TrainerAppearanceConfig) {
     val updated = _playerTrainer.value.copy(appearance = transform(_playerTrainer.value.appearance))
     _playerTrainer.value = updated
-    if (_selectedViewportTrainer.value.id == updated.id) {
+    if (_selectedViewportTrainer.value.id == updated.id || _selectedViewportTrainer.value.roleCategory == TrainerRoleCategory.PROTAGONIST) {
       _selectedViewportTrainer.value = updated
     }
     audioEngine.playSfx(StudioSfxType.UI_HOVER)
+    viewModelScope.launch(Dispatchers.IO) {
+      val projId = _activeProjectId.value ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
+      customTrainerDao?.upsertCustomTrainer(
+        CustomTrainerEntity.fromTrainerSpec(updated, projectId = projId, isPlayerAvatar = true)
+      )
+    }
+  }
+
+  fun updateProtagonistIdentity(name: String, title: String) {
+    val cleanName = name.take(32)
+    val cleanTitle = title.take(40)
+    val updated = _playerTrainer.value.copy(
+      name = cleanName.ifBlank { _playerTrainer.value.name },
+      title = cleanTitle.ifBlank { _playerTrainer.value.title },
+    )
+    _playerTrainer.value = updated
+    if (_selectedViewportTrainer.value.id == updated.id || _selectedViewportTrainer.value.roleCategory == TrainerRoleCategory.PROTAGONIST) {
+      _selectedViewportTrainer.value = updated
+    }
+    viewModelScope.launch(Dispatchers.IO) {
+      val projId = _activeProjectId.value ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
+      customTrainerDao?.upsertCustomTrainer(
+        CustomTrainerEntity.fromTrainerSpec(updated, projectId = projId, isPlayerAvatar = true)
+      )
+    }
+  }
+
+  fun selectProtagonistPreset(preset: TrainerCharacterSpec) {
+    val updated = preset.copy(
+      teamDexIds = _gameTestState.value.activePartyDexIds.ifEmpty { preset.teamDexIds },
+    )
+    _playerTrainer.value = updated
+    if (_viewportInspectsTrainer.value) {
+      _selectedViewportTrainer.value = updated
+    }
+    // Let the freshly selected 1-tap preset render immediately on the overworld
+    _spriteEditorState.update { it.copy(useCustomPlayerAvatarBitmap = false) }
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+    _statusBannerMessage.value = "Switched Hero Avatar preset to ${updated.name} (${updated.title})!"
     viewModelScope.launch(Dispatchers.IO) {
       val projId = _activeProjectId.value ?: LocalStudioProjectRepository.DEFAULT_MASTER_PROJECT_ID
       customTrainerDao?.upsertCustomTrainer(
@@ -3358,6 +3500,7 @@ class StudioViewModel(
         }
       }
       loadMapForRegion(project.id, _activeMapRegionId.value)
+      restoreSideModeRecordFromRoom(project.id)
     }
     _hasUnsavedChanges.value = false
     if (announce) {
@@ -3422,7 +3565,8 @@ class StudioViewModel(
   }
 
   /**
-   * Generates a complete v4.0 portable JSON bundle for SAF CreateDocument("application/json").
+   * Generates a complete v5.0 portable JSON bundle (including custom Trainers & Protagonist avatar)
+   * for SAF CreateDocument("application/json").
    */
   suspend fun exportActiveProjectJson(): Result<String> {
     val projectId = activeProject.value?.id ?: activePersistenceProjectKey()
@@ -3431,8 +3575,8 @@ class StudioViewModel(
   }
 
   /**
-   * Imports a portable v4.0 JSON project bundle via SAF OpenDocument() into Room SQLite
-   * and immediately activates it.
+   * Imports a portable v5.0 (or backward-compatible v4.0) JSON project bundle via SAF OpenDocument()
+   * into Room SQLite and immediately activates it.
    */
   fun importProjectFromJson(jsonText: String) {
     viewModelScope.launch {
@@ -3663,6 +3807,329 @@ class StudioViewModel(
 
   fun notifyStatusBanner(message: String) {
     _statusBannerMessage.value = message
+  }
+
+  // =========================================================================
+  // 5 PLAYABLE SIDE MODES (Room v6 Persisted Records)
+  // =========================================================================
+
+  private suspend fun restoreSideModeRecordFromRoom(projectKey: String) {
+    val saved = persistenceDao.getSideModeRecord(projectKey) ?: SideModeRecordEntity(projectId = projectKey)
+    withContext(Dispatchers.Main) {
+      _sideModesState.update { s ->
+        s.copy(
+          record = saved,
+          tower = s.tower.copy(currentStreak = saved.battleTowerCurrentStreak),
+          snap = LentalSnapEngine.createSession(_gameTestState.value.activeRegionId),
+        )
+      }
+      _campaignState.update { c ->
+        val syncedRibbons = (c.completedChapterIds.size * 2 + saved.contestRibbonsWon).coerceAtMost(99)
+        c.copy(animeRibbonsAndKeys = maxOf(c.animeRibbonsAndKeys, syncedRibbons))
+      }
+    }
+  }
+
+  private fun persistSideModeRecord(transform: (SideModeRecordEntity) -> SideModeRecordEntity) {
+    val projectKey = activePersistenceProjectKey()
+    val base = _sideModesState.value.record.let {
+      if (it.projectId == projectKey) it else it.copy(projectId = projectKey)
+    }
+    val updated = transform(base).copy(
+      projectId = projectKey,
+      updatedAtEpochMs = System.currentTimeMillis(),
+    )
+    _sideModesState.update { it.copy(record = updated) }
+    viewModelScope.launch(Dispatchers.IO) {
+      persistenceDao.upsertSideModeRecord(updated)
+    }
+  }
+
+  fun selectSideMode(mode: SideModeType) {
+    _sideModesState.update { s ->
+      val syncedSnap = if (mode == SideModeType.LENTAL_SNAP && s.snap.regionId != _gameTestState.value.activeRegionId) {
+        LentalSnapEngine.createSession(_gameTestState.value.activeRegionId)
+      } else {
+        s.snap
+      }
+      s.copy(activeMode = mode, snap = syncedSnap)
+    }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  // Mode 1: Battle Tower / Frontier Streak
+  fun startBattleTowerGauntlet() {
+    val party = _gameTestState.value.activePartyDexIds
+    val streak = _sideModesState.value.record.battleTowerCurrentStreak
+    val started = BattleTowerEngine.startGauntlet(
+      partyDexIds = party,
+      resolveEntity = { findPokemonByDex(it) },
+      startingStreak = streak,
+    )
+    _sideModesState.update { it.copy(tower = started) }
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+  }
+
+  fun executeBattleTowerMove(move: BattleMoveSpec) {
+    val outcome = BattleTowerEngine.executeTurn(
+      state = _sideModesState.value.tower,
+      move = move,
+      resolveEntity = { findPokemonByDex(it) },
+    )
+    _sideModesState.update { it.copy(tower = outcome.nextState) }
+    audioEngine.playSfx(outcome.sfxCue)
+    if (outcome.bpAwardedNow > 0 || outcome.newStreak != null) {
+      persistSideModeRecord { rec ->
+        val nextStreak = outcome.newStreak ?: rec.battleTowerCurrentStreak
+        rec.copy(
+          battleTowerCurrentStreak = nextStreak,
+          battleTowerBestStreak = maxOf(rec.battleTowerBestStreak, nextStreak),
+          battlePoints = rec.battlePoints + outcome.bpAwardedNow,
+        )
+      }
+      if (outcome.nextState.gauntletCompleted) {
+        _statusBannerMessage.value = "FRONTIER SYMBOL EARNED! Cleared all 7 Battle Tower rounds (+${outcome.bpAwardedNow} BP)!"
+      }
+    }
+  }
+
+  fun switchBattleTowerSlot(slotIndex: Int) {
+    _sideModesState.update { it.copy(tower = BattleTowerEngine.switchPlayerSlot(it.tower, slotIndex)) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun advanceBattleTowerRound() {
+    _sideModesState.update { s ->
+      s.copy(tower = BattleTowerEngine.advanceToNextRound(s.tower) { findPokemonByDex(it) })
+    }
+    audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+  }
+
+  fun redeemBattleTowerBpReward(reward: TowerBpReward) {
+    val currentBp = _sideModesState.value.record.battlePoints
+    if (currentBp < reward.bpCost) {
+      _statusBannerMessage.value = "Need ${reward.bpCost} BP to redeem ${reward.label} (Wallet: $currentBp BP)."
+      audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+      return
+    }
+    persistSideModeRecord { rec ->
+      rec.copy(battlePoints = (rec.battlePoints - reward.bpCost).coerceAtLeast(0))
+    }
+    viewModelScope.launch(Dispatchers.IO) {
+      val existing = persistenceDao.getItemById(reward.itemId)
+      if (existing != null) {
+        persistenceDao.upsertItem(existing.copy(quantity = existing.quantity + reward.grantQuantity))
+      } else {
+        val fallback = StudioItemCatalog.defaultItems.firstOrNull { it.id == reward.itemId }
+          ?: StudioItemEntity(
+            id = reward.itemId,
+            name = reward.label,
+            category = "HOLD_ITEM",
+            description = reward.description,
+            effectTag = "HOLD:${reward.itemId.uppercase()}",
+            quantity = 0,
+            accentHex = "#FFD166",
+          )
+        persistenceDao.upsertItem(fallback.copy(quantity = fallback.quantity + reward.grantQuantity))
+      }
+    }
+    audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+    _statusBannerMessage.value = "Redeemed ${reward.label} for ${reward.bpCost} BP! Added directly to your Bag."
+  }
+
+  // Mode 2: Prism Contest & Showcase Appeal Stage
+  fun startPrismContest(category: ContestCategory) {
+    val lead = findPokemonByDex(_gameTestState.value.activeLeadDexId)
+    val started = PrismContestEngine.startContest(
+      category = category,
+      playerName = _playerTrainer.value.name,
+      leadPokemon = lead,
+    )
+    _sideModesState.update { it.copy(contest = started) }
+    audioEngine.playSfx(StudioSfxType.UI_CONFIRM)
+  }
+
+  fun performPrismContestAppeal(appeal: ContestAppealSpec) {
+    val outcome = PrismContestEngine.performAppealRound(_sideModesState.value.contest, appeal)
+    _sideModesState.update { it.copy(contest = outcome.nextState) }
+    audioEngine.playSfx(if (outcome.ribbonAwarded) StudioSfxType.LEVEL_UP else StudioSfxType.CAPTURE_SPARKLE)
+    if (outcome.nextState.isFinished) {
+      persistSideModeRecord { rec ->
+        rec.copy(
+          contestRibbonsWon = rec.contestRibbonsWon + if (outcome.ribbonAwarded) 1 else 0,
+          contestBestScore = maxOf(rec.contestBestScore, outcome.finalPlayerScore),
+        )
+      }
+      if (outcome.ribbonAwarded) {
+        _campaignState.update { c ->
+          c.copy(animeRibbonsAndKeys = (c.animeRibbonsAndKeys + 1).coerceAtMost(99))
+        }
+        _statusBannerMessage.value = "Won the ${outcome.nextState.category.label} Prism Ribbon (${outcome.finalPlayerScore}♥)! Added to Campaign Ribbons."
+      }
+    }
+  }
+
+  // Mode 3: Lental Photosphere Snap
+  fun stepLentalSnapFrame() {
+    _sideModesState.update { it.copy(snap = LentalSnapEngine.stepFrame(it.snap)) }
+  }
+
+  fun tossSnapIlluminaOrb() {
+    val prev = _sideModesState.value.snap
+    val next = LentalSnapEngine.tossIlluminaOrb(prev)
+    if (next != prev) {
+      _sideModesState.update { it.copy(snap = next) }
+      audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+    }
+  }
+
+  fun tossSnapApple() {
+    val prev = _sideModesState.value.snap
+    val next = LentalSnapEngine.tossApple(prev)
+    if (next != prev) {
+      _sideModesState.update { it.copy(snap = next) }
+      audioEngine.playSfx(StudioSfxType.ITEM_USE)
+    }
+  }
+
+  fun nextSnapSubject() {
+    _sideModesState.update { it.copy(snap = LentalSnapEngine.nextSubject(it.snap)) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun captureLentalSnapPhoto() {
+    val snap = _sideModesState.value.snap
+    val species = findPokemonByDex(snap.subjectDex)
+    val (nextSnap, shot) = LentalSnapEngine.capturePhoto(
+      state = snap,
+      speciesName = species.name,
+      timeOfDay = _gameTestState.value.timeOfDay,
+    )
+    _sideModesState.update { it.copy(snap = nextSnap) }
+    audioEngine.playSfx(if (shot.starRating >= 4) StudioSfxType.LEVEL_UP else StudioSfxType.CAPTURE_SPARKLE)
+    if (shot.totalScore > _sideModesState.value.record.bestSnapScore) {
+      val caption = "${shot.speciesName} (${shot.tierLabel} • ${shot.pose.label})"
+      persistSideModeRecord { rec ->
+        rec.copy(
+          bestSnapScore = shot.totalScore,
+          bestSnapStarRating = shot.starRating,
+          bestSnapCaption = caption,
+        )
+      }
+      _statusBannerMessage.value = "NEW PHOTOSPHERE RECORD! $caption — ${shot.totalScore} pts!"
+    }
+  }
+
+  // Mode 4: Mystery Rift Dungeon Crawl
+  fun startMysteryRiftDungeon() {
+    val seed = (System.currentTimeMillis() and 0x7FFF).toInt().coerceAtLeast(1)
+    val started = MysteryRiftEngine.startDungeon(
+      regionId = _gameTestState.value.activeRegionId,
+      seed = seed,
+      resolveName = { findPokemonByDex(it).name },
+    )
+    _sideModesState.update { it.copy(rift = started) }
+    persistSideModeRecord { rec ->
+      rec.copy(deepestRiftFloor = maxOf(rec.deepestRiftFloor, 1))
+    }
+    audioEngine.playSfx(StudioSfxType.DOOR_WARP_SWOOSH)
+  }
+
+  fun stepMysteryRift(dRow: Int, dCol: Int, useSignatureSkill: Boolean = false) {
+    val outcome = MysteryRiftEngine.stepOrAttack(
+      state = _sideModesState.value.rift,
+      dRow = dRow,
+      dCol = dCol,
+      useSignatureSkill = useSignatureSkill,
+      resolveName = { findPokemonByDex(it).name },
+    )
+    _sideModesState.update { it.copy(rift = outcome.nextState) }
+    outcome.sfxCue?.let { audioEngine.playSfx(it) }
+    if (outcome.reachedNewFloor != null || outcome.guardianDefeated) {
+      persistSideModeRecord { rec ->
+        rec.copy(
+          deepestRiftFloor = maxOf(rec.deepestRiftFloor, outcome.reachedNewFloor ?: outcome.nextState.floorNumber),
+          riftGuardiansDefeated = rec.riftGuardiansDefeated + if (outcome.guardianDefeated) 1 else 0,
+        )
+      }
+      if (outcome.guardianDefeated) {
+        _statusBannerMessage.value = "MYSTERY RIFT CLEARED! Defeated the Floor-5 Rift Guardian!"
+      }
+    }
+  }
+
+  fun useMysteryRiftOranBerry() {
+    val outcome = MysteryRiftEngine.useOranBerry(_sideModesState.value.rift)
+    _sideModesState.update { it.copy(rift = outcome.nextState) }
+    outcome.sfxCue?.let { audioEngine.playSfx(it) }
+  }
+
+  // Mode 5: Ranger Capture Styler & Prism Camp Bonding
+  fun stepRangerWildMovement() {
+    _sideModesState.update { it.copy(ranger = RangerCampEngine.stepWildMovement(it.ranger)) }
+  }
+
+  fun beginRangerLoopDrag(normX: Float, normY: Float) {
+    _sideModesState.update { it.copy(ranger = RangerCampEngine.beginDrag(it.ranger, normX, normY)) }
+  }
+
+  fun stepRangerLoopDrag(normX: Float, normY: Float) {
+    val outcome = RangerCampEngine.stepLoopDrag(_sideModesState.value.ranger, normX, normY)
+    _sideModesState.update { it.copy(ranger = outcome.nextState) }
+    when {
+      outcome.justCaptured -> {
+        audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+        persistSideModeRecord { rec ->
+          rec.copy(rangerCapturesCompleted = rec.rangerCapturesCompleted + 1)
+        }
+        _statusBannerMessage.value = "Ranger Capture Complete! ${outcome.nextState.targetName} is ready to recruit!"
+      }
+      outcome.justCompletedLoop -> audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+      outcome.lineBroken -> audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+    }
+  }
+
+  fun endRangerLoopDrag() {
+    _sideModesState.update { it.copy(ranger = RangerCampEngine.endDrag(it.ranger)) }
+  }
+
+  fun selectNextRangerTarget() {
+    val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == _gameTestState.value.activeRegionId }
+      ?: MasterCanonTemplateCatalog.worldChapters.first()
+    val pool = (chapter.encounterPoolDexIds + listOf(448, 25, 133, 658, 384)).distinct()
+    val currentIdx = pool.indexOf(_sideModesState.value.ranger.targetDex).coerceAtLeast(0)
+    val nextDex = pool[(currentIdx + 1) % pool.size]
+    val nextEnt = findPokemonByDex(nextDex)
+    _sideModesState.update { it.copy(ranger = RangerCampEngine.createTrial(nextDex, nextEnt.name)) }
+    audioEngine.playSfx(StudioSfxType.UI_HOVER)
+  }
+
+  fun recruitRangerTargetToParty() {
+    val ranger = _sideModesState.value.ranger
+    if (!ranger.isCaptured) return
+    markAtlasCaptured(ranger.targetDex)
+    addPokemonToActiveParty(ranger.targetDex)
+    selectNextRangerTarget()
+  }
+
+  fun performPrismCampActivity(activity: CampActivityType) {
+    val lead = findPokemonByDex(_gameTestState.value.activeLeadDexId)
+    val (nextBond, nextCamp) = RangerCampEngine.performCampActivity(
+      currentBondGauge = _gameTestState.value.bondGauge,
+      activity = activity,
+      partnerName = lead.name,
+      campState = _sideModesState.value.camp,
+    )
+    if (activity.healAll) {
+      healFullParty()
+    }
+    _gameTestState.update { it.copy(bondGauge = nextBond) }
+    _sideModesState.update { it.copy(camp = nextCamp) }
+    persistSideModeRecord { rec ->
+      rec.copy(campMealsServed = rec.campMealsServed + 1)
+    }
+    audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
+    _statusBannerMessage.value = nextCamp.lastActivityLabel
   }
 
   companion object {

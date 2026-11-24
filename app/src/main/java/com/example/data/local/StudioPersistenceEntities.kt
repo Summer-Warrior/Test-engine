@@ -360,6 +360,24 @@ data class CustomTrainerEntity(
   }
 }
 
+@Entity(tableName = "side_mode_records")
+data class SideModeRecordEntity(
+  @PrimaryKey val projectId: String,
+  val battleTowerBestStreak: Int = 0,
+  val battleTowerCurrentStreak: Int = 0,
+  val battlePoints: Int = 0,
+  val contestRibbonsWon: Int = 0,
+  val contestBestScore: Int = 0,
+  val bestSnapScore: Int = 0,
+  val bestSnapStarRating: Int = 0,
+  val bestSnapCaption: String = "",
+  val deepestRiftFloor: Int = 0,
+  val riftGuardiansDefeated: Int = 0,
+  val rangerCapturesCompleted: Int = 0,
+  val campMealsServed: Int = 0,
+  val updatedAtEpochMs: Long = System.currentTimeMillis(),
+)
+
 @Dao
 interface CustomTrainerDao {
   @Query("SELECT * FROM custom_trainers ORDER BY isPlayerAvatar DESC, updatedAtEpochMs DESC")
@@ -374,8 +392,14 @@ interface CustomTrainerDao {
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsertCustomTrainer(trainer: CustomTrainerEntity)
 
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertCustomTrainers(trainers: List<CustomTrainerEntity>)
+
   @Query("DELETE FROM custom_trainers WHERE id = :id")
   suspend fun deleteCustomTrainer(id: String)
+
+  @Query("DELETE FROM custom_trainers WHERE projectId = :projectId")
+  suspend fun deleteTrainersForProject(projectId: String)
 }
 
 @Dao
@@ -538,4 +562,17 @@ interface StudioPersistenceDao {
 
   @Query("DELETE FROM campaign_state WHERE projectId = :projectId")
   suspend fun deleteCampaignState(projectId: String)
+
+  // Side Modes Records (Room v6)
+  @Query("SELECT * FROM side_mode_records WHERE projectId = :projectId LIMIT 1")
+  fun observeSideModeRecord(projectId: String): Flow<SideModeRecordEntity?>
+
+  @Query("SELECT * FROM side_mode_records WHERE projectId = :projectId LIMIT 1")
+  suspend fun getSideModeRecord(projectId: String): SideModeRecordEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertSideModeRecord(record: SideModeRecordEntity)
+
+  @Query("DELETE FROM side_mode_records WHERE projectId = :projectId")
+  suspend fun deleteSideModeRecord(projectId: String)
 }

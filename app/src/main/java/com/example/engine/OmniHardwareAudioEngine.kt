@@ -264,6 +264,7 @@ class OmniHardwareAudioEngine {
   private var activeBgmJob: Job? = null
 
   @Volatile private var activeBgmThemeId: String? = null
+  @Volatile private var activePlayingSignature: BgmCacheKey? = null
 
   @Volatile var isMuted: Boolean = false
     private set
@@ -326,11 +327,22 @@ class OmniHardwareAudioEngine {
     theme: BgmThemeId,
     dynamicState: DynamicBattleAudioState = activeDynamicState,
   ) {
-    activeBgmThemeId = theme.id
-    activeDynamicState = dynamicState
-    activeBgmJob?.cancel()
     val paramsSnapshot = activeAudioParams
     val dynamicSnapshot = dynamicState
+    val signature = BgmCacheKey(theme, paramsSnapshot, dynamicSnapshot)
+    activeBgmThemeId = theme.id
+    activeDynamicState = dynamicSnapshot
+
+    // Skip redundant AudioTrack restart when the exact same BGM signature is already playing
+    val alreadyPlayingSame = synchronized(trackLock) {
+      activePlayingSignature == signature && activeBgmTrack != null && !isMuted
+    }
+    if (alreadyPlayingSame) {
+      applyTrackVolume()
+      return
+    }
+
+    activeBgmJob?.cancel()
     activeBgmJob = scope.launch {
       val pcm = renderBgmLoopPcm(theme, paramsSnapshot, dynamicSnapshot)
       bgmMutex.withLock {
@@ -362,6 +374,7 @@ class OmniHardwareAudioEngine {
           track.play()
           synchronized(trackLock) {
             activeBgmTrack = track
+            activePlayingSignature = signature
           }
         }
       }
@@ -372,6 +385,7 @@ class OmniHardwareAudioEngine {
     activeBgmJob?.cancel()
     activeBgmJob = null
     activeBgmThemeId = null
+    activePlayingSignature = null
     scope.launch {
       bgmMutex.withLock {
         stopBgmTrackLocked()
@@ -382,6 +396,7 @@ class OmniHardwareAudioEngine {
   fun stopBgmImmediate() {
     activeBgmJob?.cancel()
     activeBgmJob = null
+    activePlayingSignature = null
     stopBgmTrackLocked()
   }
 
@@ -389,6 +404,7 @@ class OmniHardwareAudioEngine {
     val track = synchronized(trackLock) {
       val current = activeBgmTrack
       activeBgmTrack = null
+      activePlayingSignature = null
       current
     }
     if (track != null) {
@@ -474,10 +490,29 @@ class OmniHardwareAudioEngine {
     scope.cancel()
   }
 
+  data class BgmCacheKey(
+    val theme: BgmThemeId,
+    val params: ConvergedAudioParams,
+    val dynamicState: DynamicBattleAudioState,
+  )
+
   companion object {
     const val SAMPLE_RATE = 44100
+    const val MAX_BGM_CACHE_ENTRIES = 6
     private const val TWO_PI = 2.0 * PI
     private const val INV_SAMPLE_RATE = 1.0 / SAMPLE_RATE
+
+    // Thread-safe LRU cache holding up to 6 synthesized 64-step stereo PCM loops
+    private val bgmPcmCache = object : LinkedHashMap<BgmCacheKey, ShortArray>(8, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BgmCacheKey, ShortArray>?): Boolean =
+        size > MAX_BGM_CACHE_ENTRIES
+    }
+
+    fun bgmPcmCacheSize(): Int = synchronized(bgmPcmCache) { bgmPcmCache.size }
+
+    fun clearBgmPcmCache() {
+      synchronized(bgmPcmCache) { bgmPcmCache.clear() }
+    }
 
     // Precomputed MIDI frequency table (0..127) for fast allocation-free inner loop
     private val MIDI_HZ_TABLE = DoubleArray(128) { midi ->
@@ -505,20 +540,21 @@ class OmniHardwareAudioEngine {
     private fun sanitize(value: Double): Double = if (value.isFinite()) value else 0.0
 
     /**
-     * Synthesizes a click-free, seamless 64-step multi-section stereo PCM loop (44.1kHz, 16-bit)
-     * across 6 frequency-separated stereo lanes + dynamic battle layers (Low-HP urgency pulse &
-     * Boss Final Ace climax tempo/octave lift) + optional region-matched ambient bed, routed through
-     * cross-fed SPC700/SPU stereo feedback echo and a NaN/clipping-safe master tanh() soft limiter.
-     *
-     * Runs 2 passes through the full 64-step composition so echo delay lines, filters, and oscillator
-     * phases are fully warmed up, outputs pass 2 only, and applies a 128-frame cosine micro-crossfade
-     * across the loop seam so AudioTrack.setLoopPoints(0, frameCount, -1) loops without clicks/pops.
+     * Synthesizes (or retrieves from the thread-safe 6-slot LRU cache) a click-free, seamless
+     * 64-step multi-section stereo PCM loop (44.1kHz, 16-bit) across 6 frequency-separated stereo
+     * lanes + dynamic battle layers (Low-HP urgency pulse & Boss Final Ace climax tempo/octave lift)
+     * + optional region-matched ambient bed, routed through cross-fed SPC700/SPU stereo feedback
+     * echo and a NaN/clipping-safe master tanh() soft limiter.
      */
     fun renderBgmLoopPcm(
       theme: BgmThemeId,
       params: ConvergedAudioParams,
       dynamicState: DynamicBattleAudioState = DynamicBattleAudioState(),
     ): ShortArray {
+      val cacheKey = BgmCacheKey(theme, params, dynamicState)
+      synchronized(bgmPcmCache) {
+        bgmPcmCache[cacheKey]?.let { return it }
+      }
       val score = theme.score
       val steps = score.melody64.size
       val climaxActive = dynamicState.bossFinalAceClimax
@@ -1008,6 +1044,9 @@ class OmniHardwareAudioEngine {
         val limR = tanh(sanitize(pass2R[frame]) * 1.12)
         out[frame * 2] = (limL * Short.MAX_VALUE * 0.82).toInt().coerceIn(-32767, 32767).toShort()
         out[frame * 2 + 1] = (limR * Short.MAX_VALUE * 0.82).toInt().coerceIn(-32767, 32767).toShort()
+      }
+      synchronized(bgmPcmCache) {
+        bgmPcmCache[cacheKey] = out
       }
       return out
     }

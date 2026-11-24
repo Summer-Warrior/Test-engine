@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
-import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Build
 import androidx.compose.foundation.background
@@ -44,9 +43,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import coil.imageLoader
-import coil.request.ImageRequest
-import coil.request.SuccessResult
 import com.example.engine.SpritePixelMatrixEngine
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
@@ -211,31 +207,6 @@ internal fun DrawScope.drawIndexedSprite(
       drawLine(lineColor, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1f)
       drawLine(lineColor, start = Offset(0f, y), end = Offset(size.width, y), strokeWidth = 1f)
     }
-  }
-}
-
-internal fun createBobVariantFrame(baseFrame: List<Int>): List<Int> {
-  val grid = SpritePixelMatrixEngine.GRID_SIZE
-  return List(SpritePixelMatrixEngine.PIXEL_COUNT) { idx ->
-    val r = idx / grid
-    val c = idx % grid
-    if (r == grid - 1) -1 else baseFrame[(r + 1) * grid + c]
-  }
-}
-
-internal suspend fun loadSoftwareBitmapFromUrl(context: Context, url: String): Bitmap? {
-  if (url.isBlank()) return null
-  return withContext(Dispatchers.IO) {
-    runCatching {
-      val loader = context.imageLoader
-      val request = ImageRequest.Builder(context)
-        .data(url)
-        .allowHardware(false)
-        .build()
-      val result = loader.execute(request) as? SuccessResult ?: return@runCatching null
-      val bmp = (result.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
-      if (bmp.config == Bitmap.Config.ARGB_8888) bmp else bmp.copy(Bitmap.Config.ARGB_8888, false)
-    }.getOrNull()
   }
 }
 

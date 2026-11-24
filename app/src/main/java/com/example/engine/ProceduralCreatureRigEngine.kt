@@ -208,7 +208,6 @@ object ProceduralCreatureRigEngine {
     val canvas = IntArray(dim * dim) { 0 }
     val zBuffer = IntArray(dim * dim) { Int.MIN_VALUE }
 
-    val sliceCount = 9
     val yawSlope = sin(Math.toRadians(yawBucket.toDouble())).toFloat() * 1.45f
     val pitchSlope = 0.42f
 

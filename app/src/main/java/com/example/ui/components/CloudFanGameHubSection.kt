@@ -1,6 +1,6 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -52,13 +53,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.R
 import com.example.data.model.ConsoleFusionConfig
 import com.example.data.model.FanGameProject
 import com.example.engine.HardwarePlatformSpec
@@ -136,16 +139,125 @@ fun CloudFanGameHubSection(
       colors = CardDefaults.cardColors(containerColor = StudioCardDark),
     ) {
       Column(modifier = Modifier.padding(14.dp)) {
-        Image(
-          painter = painterResource(id = R.drawable.img_cloud_hub_banner_1794570185388),
-          contentDescription = "Local Studio Vault Banner",
+        // Procedural Compose Canvas Vector Studio Vault Banner (zero raster bitmap artifact)
+        Box(
           modifier = Modifier
             .fillMaxWidth()
             .height(132.dp)
             .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, StudioBorderDark, RoundedCornerShape(14.dp)),
-          contentScale = ContentScale.Crop,
-        )
+            .border(1.dp, CyberCyan.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+            .testTag("studio_vault_vector_banner"),
+        ) {
+          Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            drawRect(
+              brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF070C1B), Color(0xFF141E3A), Color(0xFF1E1338)),
+                start = Offset.Zero,
+                end = Offset(w, h),
+              ),
+            )
+            // Mode-7 perspective horizon grid
+            val horizonY = h * 0.54f
+            for (i in 0..7) {
+              val t = i / 7f
+              val y = horizonY + (h - horizonY) * (t * t)
+              drawLine(
+                color = CyberCyan.copy(alpha = 0.14f + t * 0.14f),
+                start = Offset(0f, y),
+                end = Offset(w, y),
+                strokeWidth = 1.2f,
+              )
+            }
+            for (i in -6..6) {
+              drawLine(
+                color = CyberCyan.copy(alpha = 0.15f),
+                start = Offset(w * 0.5f + i * (w * 0.045f), horizonY),
+                end = Offset(w * 0.5f + i * (w * 0.18f), h),
+                strokeWidth = 1.1f,
+              )
+            }
+            // Ambient Prism resonance aura
+            drawCircle(
+              brush = Brush.radialGradient(
+                colors = listOf(CyberCyan.copy(alpha = 0.28f), Color.Transparent),
+                center = Offset(w * 0.80f, h * 0.46f),
+                radius = h * 0.65f,
+              ),
+              radius = h * 0.65f,
+              center = Offset(w * 0.80f, h * 0.46f),
+            )
+            drawCircle(
+              brush = Brush.radialGradient(
+                colors = listOf(Color(0xFFFF2A85).copy(alpha = 0.22f), Color.Transparent),
+                center = Offset(w * 0.20f, h * 0.35f),
+                radius = h * 0.55f,
+              ),
+              radius = h * 0.55f,
+              center = Offset(w * 0.20f, h * 0.35f),
+            )
+            // Crystalline Prism Diamond + Poké-Core Emblem on right side
+            val cx = w * 0.82f
+            val cy = h * 0.48f
+            val r = h * 0.31f
+            val diamond = Path().apply {
+              moveTo(cx, cy - r)
+              lineTo(cx + r * 0.92f, cy)
+              lineTo(cx, cy + r)
+              lineTo(cx - r * 0.92f, cy)
+              close()
+            }
+            drawPath(
+              path = diamond,
+              brush = Brush.linearGradient(
+                colors = listOf(CyberCyan.copy(alpha = 0.38f), Color(0xFFB388FF).copy(alpha = 0.45f)),
+                start = Offset(cx - r, cy - r),
+                end = Offset(cx + r, cy + r),
+              ),
+            )
+            drawPath(path = diamond, color = CyberCyan, style = Stroke(width = 2.4f))
+            drawCircle(color = Color(0xFFFFB300), radius = r * 0.24f, center = Offset(cx, cy), style = Stroke(width = 2.2f))
+            drawCircle(color = Color.White, radius = r * 0.10f, center = Offset(cx, cy))
+            // Decorative synthesizer waveform arc
+            val wave = Path().apply {
+              moveTo(w * 0.04f, horizonY)
+              for (step in 0..24) {
+                val frac = step / 24f
+                val px = w * (0.04f + frac * 0.60f)
+                val py = horizonY - kotlin.math.sin(frac * Math.PI * 4.0).toFloat() * (h * 0.10f)
+                lineTo(px, py)
+              }
+            }
+            drawPath(path = wave, color = Color(0xFFFFB300).copy(alpha = 0.55f), style = Stroke(width = 2f))
+          }
+          Column(
+            modifier = Modifier
+              .align(Alignment.CenterStart)
+              .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              text = "PRISM RESONANCE ENGINE • ROOM v5",
+              style = MaterialTheme.typography.labelSmall,
+              color = CyberCyan,
+              fontWeight = FontWeight.Bold,
+            )
+            Text(
+              text = "22-Region Studio Vault",
+              style = MaterialTheme.typography.titleLarge,
+              color = StudioTextPrimary,
+              fontWeight = FontWeight.Bold,
+            )
+            Text(
+              text = "1,025 Creatures • 78+ Trainers • 156 Hardware Profiles • JSON v5 Export",
+              style = MaterialTheme.typography.labelSmall,
+              color = StudioTextSecondary,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -158,13 +270,13 @@ fun CloudFanGameHubSection(
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(
                 imageVector = Icons.Default.Storage,
-                contentDescription = "Local Studio Vault Offline Room DB",
+                contentDescription = "Local Studio Vault Offline Room v5 DB",
                 tint = CyberCyan,
                 modifier = Modifier.size(16.dp),
               )
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "LOCAL STUDIO VAULT • OFFLINE ROOM DB",
+                text = "LOCAL STUDIO VAULT • OFFLINE ROOM v5",
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberCyan,
               )

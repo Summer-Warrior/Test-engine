@@ -50,7 +50,6 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.example.engine.ConvergedVisualParams
 import com.example.engine.LandmarkSilhouette
 import com.example.engine.MoveDirection
@@ -265,6 +264,7 @@ fun AutoTileMapCanvas(
   playerSpriteUrl: String? = null,
   playerDexNumber: Int = 25,
   playerCustomBitmap: Bitmap? = null,
+  trailingPartnerCustomBitmap: Bitmap? = null,
   enableDragPaint: Boolean = false,
   onTileTappedOrPainted: ((index: Int) -> Unit)? = null,
   testTagPrefix: String = "autotile_map_canvas",
@@ -281,7 +281,8 @@ fun AutoTileMapCanvas(
   )
 
   val currentCallback by rememberUpdatedState(onTileTappedOrPainted)
-  val customImg = remember(playerCustomBitmap) { playerCustomBitmap?.asImageBitmap() }
+  val customHeroImg = remember(playerCustomBitmap) { playerCustomBitmap?.asImageBitmap() }
+  val customPartnerImg = remember(trailingPartnerCustomBitmap) { trailingPartnerCustomBitmap?.asImageBitmap() }
   val palette = remember(biomeStyle) { paletteForBiome(biomeStyle) }
   val density = LocalDensity.current
 
@@ -479,7 +480,7 @@ fun AutoTileMapCanvas(
           ) {
             Text(
               text = "${zone.name} · ${zone.sourceTag}",
-              style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, lineHeight = 10.sp),
+              style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 12.sp),
               color = zoneColor,
               fontWeight = FontWeight.Bold,
               maxLines = 1,
@@ -534,7 +535,7 @@ fun AutoTileMapCanvas(
                 PoiInteractionKind.PROFESSOR_GUIDE -> "?"
                 PoiInteractionKind.HEALER_OR_LORE -> "+"
               },
-              style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp, lineHeight = 9.sp),
+              style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 12.sp),
               color = Color.Black,
               fontWeight = FontWeight.ExtraBold,
             )
@@ -576,13 +577,25 @@ fun AutoTileMapCanvas(
             ),
           )
         }
-        ProceduralCreatureThumbnail(
-          dexNumber = resolvedDex,
-          contentDescription = "Trailing Partner Creature",
-          modifier = Modifier
-            .size(tileDp * 0.86f)
-            .offset(y = partnerBobDp),
-        )
+        if (customPartnerImg != null) {
+          Image(
+            bitmap = customPartnerImg,
+            contentDescription = "Trailing Partner Custom Sprite",
+            filterQuality = FilterQuality.None,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+              .size(tileDp * 0.86f)
+              .offset(y = partnerBobDp),
+          )
+        } else {
+          ProceduralCreatureThumbnail(
+            dexNumber = resolvedDex,
+            contentDescription = "Trailing Partner Creature",
+            modifier = Modifier
+              .size(tileDp * 0.86f)
+              .offset(y = partnerBobDp),
+          )
+        }
       }
     }
 
@@ -639,9 +652,9 @@ fun AutoTileMapCanvas(
             .then(shaderMod),
           contentAlignment = Alignment.Center,
         ) {
-          if (customImg != null) {
+          if (customHeroImg != null) {
             Image(
-              bitmap = customImg,
+              bitmap = customHeroImg,
               contentDescription = "Trainer Custom Sprite",
               filterQuality = FilterQuality.None,
               contentScale = ContentScale.Fit,

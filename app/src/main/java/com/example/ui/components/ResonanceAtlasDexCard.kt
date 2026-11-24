@@ -126,6 +126,7 @@ fun ResonanceAtlasDexCard(
     val q = atlasQuery.trim()
     if (q.isEmpty()) base else base.filter {
       it.name.contains(q, ignoreCase = true) ||
+        it.prismAlias.contains(q, ignoreCase = true) ||
         it.epithet.contains(q, ignoreCase = true) ||
         it.dexNumber.toString() == q ||
         it.primaryType.contains(q, ignoreCase = true) ||
@@ -359,7 +360,12 @@ fun ResonanceAtlasDexCard(
                   overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                  text = "${species.epithet} • ${species.regionName}",
+                  text = buildString {
+                    if (species.prismAlias.isNotBlank()) {
+                      append("Prism: ${species.prismAlias} • ")
+                    }
+                    append("${species.epithet} • ${species.regionName}")
+                  },
                   style = MaterialTheme.typography.labelSmall,
                   color = CyberCyan,
                   maxLines = 1,

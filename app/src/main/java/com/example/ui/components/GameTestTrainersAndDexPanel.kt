@@ -47,11 +47,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.NationalAtlasIndex
+import com.example.data.local.NativePokemonEntity
 import com.example.engine.BattleGimmickMode
 import com.example.engine.CanonRegionChapter
 import com.example.engine.TrainerArchetype
 import com.example.engine.TrainerArchetypeCatalog
+import com.example.engine.TrainerCatalogAndRigEngine
 import com.example.engine.TrainerCategory
+import com.example.engine.TrainerPose
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.ElectricCrimson
 import com.example.ui.theme.SgbEmerald
@@ -77,6 +80,7 @@ fun GameTestTrainersAndDexPanel(
   onChallengeTrainer: (TrainerArchetype) -> Unit,
   onSummonWildPokemon: (Int) -> Unit,
   onAddPokemonToParty: (Int) -> Unit,
+  hydratedByDex: Map<Int, NativePokemonEntity> = emptyMap(),
   modifier: Modifier = Modifier,
 ) {
   var activePanelTab by remember { mutableIntStateOf(0) } // 0 = Trainers, 1 = All 1,025 Pokémon
@@ -104,7 +108,7 @@ fun GameTestTrainersAndDexPanel(
     }
   }
 
-  val fullNationalIndex = remember { NationalAtlasIndex.buildCompleteIndex() }
+  val fullNationalIndex = remember(hydratedByDex) { NationalAtlasIndex.buildCompleteIndex(hydratedByDex) }
   val regionalDexSet = remember(activeChapter.id) {
     NationalAtlasIndex.dexPoolForRegion(activeChapter.id).toSet()
   }
@@ -117,6 +121,8 @@ fun GameTestTrainersAndDexPanel(
     val q = dexQuery.trim()
     if (q.isEmpty()) base else base.filter {
       it.name.contains(q, ignoreCase = true) ||
+        it.prismAlias.contains(q, ignoreCase = true) ||
+        it.epithet.contains(q, ignoreCase = true) ||
         it.dexNumber.toString() == q ||
         it.primaryType.contains(q, ignoreCase = true) ||
         it.secondaryType.contains(q, ignoreCase = true)
@@ -256,16 +262,28 @@ fun GameTestTrainersAndDexPanel(
               .takeIf { it != BattleGimmickMode.NONE }
               ?.displayName
               ?.substringBefore(" (")
+            val resolvedSpec = remember(trainer.id, activeChapter.id) {
+              TrainerCatalogAndRigEngine.resolveTrainerForArchetype(trainer, activeChapter.id, seedNonce = 0)
+            }
             Row(
               modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(StudioSurfaceDark)
                 .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 7.dp),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+              TrainerOverworldThumbnail(
+                trainer = resolvedSpec,
+                pose = TrainerPose.OVERWORLD_DOWN,
+                modifier = Modifier
+                  .size(40.dp)
+                  .clip(RoundedCornerShape(8.dp))
+                  .background(StudioDeepNavy)
+                  .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
+              )
               Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                   text = "${trainer.className} • ${trainer.aiTactic.label}",
@@ -287,7 +305,6 @@ fun GameTestTrainersAndDexPanel(
                   overflow = TextOverflow.Ellipsis,
                 )
               }
-              Spacer(modifier = Modifier.width(8.dp))
               Button(
                 onClick = { onChallengeTrainer(trainer) },
                 colors = ButtonDefaults.buttonColors(containerColor = ElectricCrimson, contentColor = Color.White),
@@ -371,9 +388,12 @@ fun GameTestTrainersAndDexPanel(
                   overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                  text = species.primaryType +
-                    (if (species.secondaryType.isNotBlank()) "/${species.secondaryType}" else "") +
-                    " • ${species.resonanceRoleTier}",
+                  text = buildString {
+                    append(species.primaryType)
+                    if (species.secondaryType.isNotBlank()) append("/${species.secondaryType}")
+                    if (species.prismAlias.isNotBlank()) append(" • ${species.prismAlias}")
+                    append(" • ${species.resonanceRoleTier}")
+                  },
                   style = MaterialTheme.typography.labelSmall,
                   color = StudioTextSecondary,
                   maxLines = 1,

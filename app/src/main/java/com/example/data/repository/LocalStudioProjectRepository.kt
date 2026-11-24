@@ -5,10 +5,13 @@ import com.example.data.local.CustomAssetDao
 import com.example.data.local.CustomAssetRoomEntity
 import com.example.data.local.CustomDexDao
 import com.example.data.local.CustomDexRoomEntity
+import com.example.data.local.CustomTrainerDao
+import com.example.data.local.CustomTrainerEntity
 import com.example.data.local.FanGameProjectDao
 import com.example.data.local.FanGameProjectEntity
 import com.example.data.local.SavedMapEntity
 import com.example.data.local.SavedSpriteEntity
+import com.example.data.local.SideModeRecordEntity
 import com.example.data.local.StudioPersistenceDao
 import com.example.data.model.CustomDexEntry
 import com.example.data.model.CustomStudioAsset
@@ -23,7 +26,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * 100% Offline Single-Source-of-Truth Studio Project Repository backed exclusively by Room v4 DAOs.
+ * 100% Offline Single-Source-of-Truth Studio Project Repository backed exclusively by Room v6 DAOs.
  * Eliminates all network/auth gates and provides full JSON project export/import via SAF.
  */
 class LocalStudioProjectRepository(
@@ -31,6 +34,7 @@ class LocalStudioProjectRepository(
   private val customDexDao: CustomDexDao,
   private val customAssetDao: CustomAssetDao,
   private val studioPersistenceDao: StudioPersistenceDao,
+  private val customTrainerDao: CustomTrainerDao? = null,
 ) {
 
   fun observeProjects(): Flow<List<FanGameProject>> =
@@ -43,7 +47,7 @@ class LocalStudioProjectRepository(
     customAssetDao.observeAssets(projectId).map { list -> list.map { it.toDomain() } }
 
   /**
-   * Ensures the default "Pokémon: Prism Resonance" 14-Region All-Hardware Master Project
+   * Ensures the default "Pokémon: Prism Resonance" 22-Region All-Hardware Master Project
    * exists on first launch so the workspace boots immediately into an active playable project.
    */
   suspend fun ensureDefaultMasterProjectSeeded(): FanGameProject = withContext(Dispatchers.IO) {
@@ -125,6 +129,8 @@ class LocalStudioProjectRepository(
     studioPersistenceDao.deleteMapsForProject(projectId)
     studioPersistenceDao.deleteSavedSpritesForProject(projectId)
     studioPersistenceDao.deleteCampaignState(projectId)
+    studioPersistenceDao.deleteSideModeRecord(projectId)
+    customTrainerDao?.deleteTrainersForProject(projectId)
     // Never leave studio with zero projects
     if (projectDao.countProjects() == 0) {
       ensureDefaultMasterProjectSeeded()
@@ -184,13 +190,14 @@ class LocalStudioProjectRepository(
   }
 
   /**
-   * Serializes a complete PokéFusion Studio v4.0 project bundle into portable JSON for SAF Export:
+   * Serializes a complete PokéFusion Studio v5.0 project bundle into portable JSON for SAF Export:
    * - project metadata & console matrix preset
    * - campaign state (active hardware IDs, discipline mode, Extra Pretty mask, party, levels, taught TMs, shards)
    * - custom Dex entries
    * - custom Studio assets
    * - saved 16x16 pixel sprites
-   * - all 14 editable 16x16 region maps
+   * - all 22 editable 16x16 region maps
+   * - custom Trainers & Protagonist avatar profiles (Room v5)
    */
   suspend fun exportProjectToJson(projectId: String): Result<String> = withContext(Dispatchers.IO) {
     runCatching {
@@ -201,10 +208,12 @@ class LocalStudioProjectRepository(
       val studioAssets = customAssetDao.getAssetsSnapshot(projectId)
       val savedSprites = studioPersistenceDao.getSavedSpritesForProjectSnapshot(projectId)
       val savedMaps = studioPersistenceDao.getMapsForProjectSnapshot(projectId)
+      val customTrainers = customTrainerDao?.getTrainersForProjectSnapshot(projectId).orEmpty()
+      val sideModeRecord = studioPersistenceDao.getSideModeRecord(projectId)
 
       val root = JSONObject().apply {
-        put("schemaVersion", 4)
-        put("format", "pokefusion_studio_project_v4")
+        put("schemaVersion", 6)
+        put("format", "pokefusion_studio_project_v6")
         put("exportedAtMs", System.currentTimeMillis())
 
         put(
@@ -318,13 +327,62 @@ class LocalStudioProjectRepository(
           )
         }
         put("savedMaps", mapsArray)
+
+        val trainersArray = JSONArray()
+        customTrainers.forEach { t ->
+          trainersArray.put(
+            JSONObject().apply {
+              put("id", t.id)
+              put("name", t.name)
+              put("title", t.title)
+              put("roleCategory", t.roleCategory)
+              put("regionId", t.regionId)
+              put("teamDexIdsCsv", t.teamDexIdsCsv)
+              put("skinHex", t.skinHex)
+              put("hairHex", t.hairHex)
+              put("outfitPrimaryHex", t.outfitPrimaryHex)
+              put("outfitSecondaryHex", t.outfitSecondaryHex)
+              put("accentHex", t.accentHex)
+              put("headgearToken", t.headgearToken)
+              put("outfitStyleToken", t.outfitStyleToken)
+              put("hairStyleIndex", t.hairStyleIndex)
+              put("companionPoseIndex", t.companionPoseIndex)
+              put("introQuote", t.introQuote)
+              put("defeatQuote", t.defeatQuote)
+              put("isPlayerAvatar", t.isPlayerAvatar)
+              put("updatedAtEpochMs", t.updatedAtEpochMs)
+            }
+          )
+        }
+        put("customTrainers", trainersArray)
+
+        if (sideModeRecord != null) {
+          put(
+            "sideModeRecords",
+            JSONObject().apply {
+              put("battleTowerBestStreak", sideModeRecord.battleTowerBestStreak)
+              put("battleTowerCurrentStreak", sideModeRecord.battleTowerCurrentStreak)
+              put("battlePoints", sideModeRecord.battlePoints)
+              put("contestRibbonsWon", sideModeRecord.contestRibbonsWon)
+              put("contestBestScore", sideModeRecord.contestBestScore)
+              put("bestSnapScore", sideModeRecord.bestSnapScore)
+              put("bestSnapStarRating", sideModeRecord.bestSnapStarRating)
+              put("bestSnapCaption", sideModeRecord.bestSnapCaption)
+              put("deepestRiftFloor", sideModeRecord.deepestRiftFloor)
+              put("riftGuardiansDefeated", sideModeRecord.riftGuardiansDefeated)
+              put("rangerCapturesCompleted", sideModeRecord.rangerCapturesCompleted)
+              put("campMealsServed", sideModeRecord.campMealsServed)
+              put("updatedAtEpochMs", sideModeRecord.updatedAtEpochMs)
+            }
+          )
+        }
       }
       root.toString(2)
     }
   }
 
   /**
-   * Imports a PokéFusion Studio v4.0 JSON project bundle into Room SQLite,
+   * Imports a PokéFusion Studio v5.0 (or backward-compatible v4.0) JSON project bundle into Room SQLite,
    * assigning a fresh project ID on conflict so existing user work is never overwritten.
    */
   suspend fun importProjectFromJson(jsonText: String): Result<FanGameProject> = withContext(Dispatchers.IO) {
@@ -466,6 +524,61 @@ class LocalStudioProjectRepository(
         studioPersistenceDao.upsertSavedMaps(maps)
       }
       seedDefaultMapsForProject(targetProjectId)
+
+      // Room v5 custom_trainers import (gracefully skipped for backward-compatible v4 JSON bundles)
+      val trainersArr = root.optJSONArray("customTrainers")
+      if (customTrainerDao != null && trainersArr != null && trainersArr.length() > 0) {
+        val trainers = (0 until trainersArr.length()).map { idx ->
+          val o = trainersArr.getJSONObject(idx)
+          val baseId = o.optString("id", "trainer_${idx + 1}").trim().ifEmpty { "trainer_${idx + 1}" }
+          CustomTrainerEntity(
+            id = "${targetProjectId}_$baseId",
+            projectId = targetProjectId,
+            name = o.optString("name", "Imported Trainer").trim().take(60),
+            title = o.optString("title", "Prism Explorer").trim().take(60),
+            roleCategory = o.optString("roleCategory", o.optString("roleCategoryToken", "PROTAGONIST")),
+            regionId = o.optString("regionId", "kanto"),
+            teamDexIdsCsv = o.optString("teamDexIdsCsv", "25,6,94,448,658,384"),
+            skinHex = o.optString("skinHex", "#F6D0B1"),
+            hairHex = o.optString("hairHex", "#1E293B"),
+            outfitPrimaryHex = o.optString("outfitPrimaryHex", "#00E5FF"),
+            outfitSecondaryHex = o.optString("outfitSecondaryHex", "#0F172A"),
+            accentHex = o.optString("accentHex", "#FFB300"),
+            headgearToken = o.optString("headgearToken", "CAP"),
+            outfitStyleToken = o.optString("outfitStyleToken", "ADVENTURER_JACKET"),
+            hairStyleIndex = o.optInt("hairStyleIndex", 0).coerceIn(0, 5),
+            companionPoseIndex = o.optInt("companionPoseIndex", 0).coerceIn(0, 2),
+            introQuote = o.optString("introQuote", "Let's test our Resonance bond!"),
+            defeatQuote = o.optString("defeatQuote", "What a match!"),
+            isPlayerAvatar = o.optBoolean("isPlayerAvatar", false),
+            updatedAtEpochMs = now,
+          )
+        }
+        customTrainerDao.upsertCustomTrainers(trainers)
+      }
+
+      // Room v6 side_mode_records import (gracefully skipped for backward-compatible v4/v5 JSON bundles)
+      val sideJson = root.optJSONObject("sideModeRecords")
+      if (sideJson != null) {
+        studioPersistenceDao.upsertSideModeRecord(
+          SideModeRecordEntity(
+            projectId = targetProjectId,
+            battleTowerBestStreak = sideJson.optInt("battleTowerBestStreak", 0).coerceAtLeast(0),
+            battleTowerCurrentStreak = sideJson.optInt("battleTowerCurrentStreak", 0).coerceAtLeast(0),
+            battlePoints = sideJson.optInt("battlePoints", 0).coerceAtLeast(0),
+            contestRibbonsWon = sideJson.optInt("contestRibbonsWon", 0).coerceAtLeast(0),
+            contestBestScore = sideJson.optInt("contestBestScore", 0).coerceAtLeast(0),
+            bestSnapScore = sideJson.optInt("bestSnapScore", 0).coerceAtLeast(0),
+            bestSnapStarRating = sideJson.optInt("bestSnapStarRating", 0).coerceIn(0, 4),
+            bestSnapCaption = sideJson.optString("bestSnapCaption", "No Photosphere Shots Yet").take(120),
+            deepestRiftFloor = sideJson.optInt("deepestRiftFloor", 0).coerceIn(0, 5),
+            riftGuardiansDefeated = sideJson.optInt("riftGuardiansDefeated", 0).coerceAtLeast(0),
+            rangerCapturesCompleted = sideJson.optInt("rangerCapturesCompleted", 0).coerceAtLeast(0),
+            campMealsServed = sideJson.optInt("campMealsServed", 0).coerceAtLeast(0),
+            updatedAtEpochMs = now,
+          )
+        )
+      }
 
       importedProject
     }

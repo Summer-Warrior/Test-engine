@@ -469,5 +469,234 @@ class CanonEngineVerificationTest {
       assertEquals("Region ${ch.id} defaultBgmThemeId not directly registered", ch.defaultBgmThemeId, ch.resolveBgmTheme().id)
       assertTrue("Region ${ch.id} missing ambient bed", ch.resolveAmbientBed() != AmbientBedType.NONE)
     }
+
+    // 6. Audio LRU cache strictly caps at <= 6 entries and returns identical cached PCM on hit
+    assertTrue("BGM LRU cache exceeded 6 entries: ${OmniHardwareAudioEngine.bgmPcmCacheSize()}", OmniHardwareAudioEngine.bgmPcmCacheSize() <= 6)
+    val hit1 = OmniHardwareAudioEngine.renderBgmLoopPcm(BgmThemeId.PRISM_TITLE, audioParams)
+    val hit2 = OmniHardwareAudioEngine.renderBgmLoopPcm(BgmThemeId.PRISM_TITLE, audioParams)
+    assertTrue("Repeated identical BGM request must hit LRU cache", hit1 === hit2)
+  }
+
+  @Test
+  fun `unified naming 22-region caps hero companion poses sprite editor sampling and diegetic dialogue pass pure JVM checks`() {
+    // 1. Unified Species Naming across NationalAtlasIndex & built-in franchise dex (zero split-brain)
+    val builtIn = com.example.data.local.NativeFranchiseCatalogRepository.builtInFranchiseDex.associateBy { it.dexNumber }
+    val unifiedIndex = com.example.data.local.NationalAtlasIndex.buildCompleteIndex(builtIn)
+    assertEquals(1025, unifiedIndex.size)
+    assertEquals("All 1,025 unified species must retain unique primary names", 1025, unifiedIndex.map { it.name }.toSet().size)
+    assertEquals("Bulbasaur", com.example.data.local.NationalAtlasIndex.peekSpecies(1).name)
+    assertEquals("Pikachu", com.example.data.local.NationalAtlasIndex.peekSpecies(25).name)
+    assertEquals("Rayquaza", com.example.data.local.NationalAtlasIndex.peekSpecies(384).name)
+    assertEquals("Miraidon", com.example.data.local.NationalAtlasIndex.peekSpecies(1008).name)
+    assertTrue(com.example.data.local.NationalAtlasIndex.peekSpecies(25).prismAlias.isNotBlank())
+
+    // 2. 22-Region Campaign progression cap formula (all 22 chapters completable without hitting stale 14-region ceiling)
+    var state = CampaignProgressionState()
+    MasterCanonTemplateCatalog.worldChapters.forEach { ch ->
+      state = state.completeChapter(ch)
+    }
+    assertEquals(22, state.completedChapterIds.size)
+    assertEquals(22, state.harmonicShardsCollected)
+    assertTrue("Badges must surpass legacy 14-region 112 cap and stay <= 176, got ${state.badgesEarned}", state.badgesEarned in 113..176)
+    assertEquals(44, state.animeRibbonsAndKeys)
+    assertEquals(100, state.worldCoronationRank)
+    assertTrue("All 22-region invariants must hold", state.validateInvariants().isEmpty())
+
+    // 3. Hero companionPoseIndex (0..2) drives distinct visible pixel matrices & 16x16 Sprite Editor sampling
+    val baseHero = TrainerCatalogAndRigEngine.defaultProtagonist
+    val pose0 = TrainerCatalogAndRigEngine.generateTrainerSpriteMatrix(
+      baseHero.copy(appearance = baseHero.appearance.copy(companionPoseIndex = 0)),
+      TrainerPose.BATTLE_IDLE,
+    )
+    val pose1 = TrainerCatalogAndRigEngine.generateTrainerSpriteMatrix(
+      baseHero.copy(appearance = baseHero.appearance.copy(companionPoseIndex = 1)),
+      TrainerPose.BATTLE_IDLE,
+    )
+    val pose2 = TrainerCatalogAndRigEngine.generateTrainerSpriteMatrix(
+      baseHero.copy(appearance = baseHero.appearance.copy(companionPoseIndex = 2)),
+      TrainerPose.BATTLE_IDLE,
+    )
+    assertFalse("Companion pose 0 and 1 must produce visually distinct pixels", pose0.pixels.contentEquals(pose1.pixels))
+    assertFalse("Companion pose 1 and 2 must produce visually distinct pixels", pose1.pixels.contentEquals(pose2.pixels))
+
+    val (heroPal, heroFrames) = TrainerCatalogAndRigEngine.sampleTrainerToSpriteEditor16(baseHero)
+    assertEquals(8, heroPal.size)
+    assertEquals(2, heroFrames.size)
+    assertEquals(SpritePixelMatrixEngine.PIXEL_COUNT, heroFrames[0].size)
+    assertEquals(SpritePixelMatrixEngine.PIXEL_COUNT, heroFrames[1].size)
+    assertTrue("Hero 16x16 sample must contain opaque pixels and transparent backdrop", heroFrames[0].any { it >= 0 } && heroFrames[0].any { it == -1 })
+
+    // 4. Diegetic Dialogue Audit: zero 4th-wall engine/website strings in NPC or Trainer dialogue
+    val forbiddenDialogueTokens = listOf("156 hardware", "Omni-Console Viewport", "PokémonDB", "Serebii")
+    MasterCanonTemplateCatalog.worldChapters.forEach { ch ->
+      ch.pointsOfInterest.forEach { poi ->
+        forbiddenDialogueTokens.forEach { token ->
+          assertFalse(
+            "4th-wall token '$token' found in POI dialogue (${ch.id}/${poi.id}): ${poi.dialogue}",
+            poi.dialogue.contains(token, ignoreCase = true),
+          )
+        }
+      }
+    }
+    TrainerCatalogAndRigEngine.allBuiltInTrainers.forEach { tr ->
+      val combinedQuotes = (listOf(tr.introQuote, tr.switchQuote, tr.defeatQuote) + tr.dialogueLines).joinToString(" ")
+      forbiddenDialogueTokens.forEach { token ->
+        assertFalse(
+          "4th-wall token '$token' found in trainer dialogue (${tr.id}): $combinedQuotes",
+          combinedQuotes.contains(token, ignoreCase = true),
+        )
+      }
+    }
+    TrainerArchetypeCatalog.allTrainerTypes.forEach { tr ->
+      forbiddenDialogueTokens.forEach { token ->
+        assertFalse(
+          "4th-wall token '$token' found in trainer intro (${tr.id}): ${tr.introQuote}",
+          tr.introQuote.contains(token, ignoreCase = true),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `all 5 clean-room side modes pass deterministic mechanics scoring reachability and capture checks`() {
+    val resolveEntity: (Int) -> com.example.data.local.NativePokemonEntity = { dex ->
+      com.example.ui.StudioViewModelHelpers.synthesizePokemonFromAtlas(dex)
+    }
+
+    // 1. Battle Tower / Frontier Streak: 7-battle escalating gauntlet + auto-heal + Frontier Brain Boss on Round 7
+    var tower = BattleTowerEngine.startGauntlet(
+      partyDexIds = listOf(384, 150, 448),
+      resolveEntity = resolveEntity,
+      startingStreak = 0,
+    )
+    assertTrue(tower.isActive)
+    assertEquals(1, tower.roundNumber)
+    assertFalse(tower.isFrontierBrainRound)
+    val dragonMove = BattleMoveSpec("Prism Dragon Surge", PokemonType.DRAGON, MoveCategory.SPECIAL, basePower = 180)
+    val steelMove = BattleMoveSpec("Prism Flash Cannon", PokemonType.STEEL, MoveCategory.SPECIAL, basePower = 180)
+    var totalBp = 0
+    for (round in 1..7) {
+      assertEquals(round, tower.roundNumber)
+      assertEquals(round == 7, tower.isFrontierBrainRound)
+      // Verify auto-heal restored all player slots at start of every round
+      tower.playerTeamDexIds.forEach { dex ->
+        assertEquals(tower.playerMaxHpMap[dex], tower.playerHpMap[dex])
+      }
+      var guard = 0
+      while (!tower.roundCleared && !tower.gauntletFailed && guard < 40) {
+        val enemy = resolveEntity(tower.activeEnemyDex)
+        val ePrimary = PokemonType.fromString(enemy.primaryType)
+        val eSecondary = enemy.secondaryType.takeIf { it.isNotBlank() }?.let { PokemonType.fromString(it) }
+        val chosenMove = if (CanonTypeChart.calculateEffectiveness(PokemonType.DRAGON, ePrimary, eSecondary) > 0f) {
+          dragonMove
+        } else {
+          steelMove
+        }
+        val out = BattleTowerEngine.executeTurn(tower, chosenMove, resolveEntity)
+        tower = out.nextState
+        totalBp += out.bpAwardedNow
+        guard++
+      }
+      assertTrue("Round $round should clear cleanly", tower.roundCleared)
+      if (round < 7) {
+        tower = BattleTowerEngine.advanceToNextRound(tower, resolveEntity)
+      }
+    }
+    assertTrue(tower.gauntletCompleted)
+    assertEquals(7, tower.currentStreak)
+    assertEquals(33, totalBp) // 6 * 3 BP + 15 BP Frontier Brain
+    assertTrue(BattleTowerEngine.bpShopCatalog.size >= 6)
+
+    // 2. Prism Contest & Showcase Appeal Stage: 5 rounds + Crowd Excitement Encore + Ribbon victory
+    val lead = resolveEntity(384)
+    var contest = PrismContestEngine.startContest(ContestCategory.COOL, "Nova", lead)
+    assertEquals(4, contest.contestants.size)
+    val coolMoveA = BattleMoveSpec("Dragon Ascent", PokemonType.DRAGON, MoveCategory.PHYSICAL, 120)
+    val coolMoveB = BattleMoveSpec("Extreme Speed", PokemonType.ELECTRIC, MoveCategory.PHYSICAL, 80, priority = 2)
+    val appealA = PrismContestEngine.mapMoveToAppeal(coolMoveA)
+    val appealB = PrismContestEngine.mapMoveToAppeal(coolMoveB)
+    var wonRibbon = false
+    for (r in 1..5) {
+      val out = PrismContestEngine.performAppealRound(contest, if (r % 2 == 1) appealA else appealB)
+      contest = out.nextState
+      if (out.ribbonAwarded) wonRibbon = true
+    }
+    assertTrue(contest.isFinished)
+    assertTrue("Alternating matching Cool + Counter-Shield + Jam appeals should win the Prism Ribbon", wonRibbon)
+    assertTrue(contest.playerWonRibbon)
+
+    // 3. Lental Photosphere Snap: Illumina Orb + Apple + Centered Night shot yields 4★ Diamond (>= 4000 pts)
+    var snap = LentalSnapEngine.createSession("lental")
+    snap = LentalSnapEngine.stepFrame(snap)
+    snap = LentalSnapEngine.tossIlluminaOrb(snap)
+    snap = LentalSnapEngine.tossApple(snap)
+    val centeredSnap = snap.copy(subjectX = 0.50f, subjectY = 0.50f, depthScale = 1.05f)
+    val (afterSnap, shot) = LentalSnapEngine.capturePhoto(centeredSnap, "Pikachu", TimeOfDayCycle.NIGHT)
+    assertEquals(4, shot.starRating)
+    assertEquals("4★ Diamond", shot.tierLabel)
+    assertTrue("Expected >= 4000 Diamond score, got ${shot.totalScore}", shot.totalScore >= 4000)
+    assertEquals(1, afterSnap.shotsTaken.size)
+
+    // 4. Mystery Rift Dungeon Crawl: 5 procedural 10x10 floors + BFS reachability + Floor-5 Guardian defeat
+    for (f in 1..5) {
+      val floor = MysteryRiftEngine.generateFloor(f, seed = 42, regionId = "mystery_rift")
+      assertEquals(100, floor.tiles.size)
+      assertTrue(
+        "Floor $f target (${floor.stairsRow},${floor.stairsCol}) must be BFS-reachable from spawn",
+        MysteryRiftEngine.isTargetReachable(floor, floor.stairsRow, floor.stairsCol),
+      )
+      if (f == 5) {
+        assertTrue("Floor 5 must spawn the Rift Guardian", floor.enemies.any { it.isFloorGuardian })
+      }
+    }
+    val f5 = MysteryRiftEngine.generateFloor(5, seed = 42, regionId = "mystery_rift")
+    val guardian = f5.enemies.first { it.isFloorGuardian }
+    var rift = MysteryRiftState(
+      isActive = true,
+      seed = 42,
+      floorNumber = 5,
+      tiles = f5.tiles,
+      playerRow = guardian.row,
+      playerCol = (guardian.col - 1).coerceAtLeast(1),
+      playerHp = 220,
+      playerMaxHp = 220,
+      playerLevel = 8,
+      enemies = listOf(guardian),
+    )
+    var guardianDown = false
+    repeat(6) {
+      if (!rift.dungeonCleared) {
+        val out = MysteryRiftEngine.stepOrAttack(rift, 0, 0, useSignatureSkill = true)
+        rift = out.nextState
+        if (out.guardianDefeated) guardianDown = true
+      }
+    }
+    assertTrue("Floor-5 Rift Guardian should be defeated by Prism Pulse", guardianDown)
+    assertTrue(rift.dungeonCleared)
+
+    // 5. Ranger Capture Styler (touch-loop 360° circle drag) & Prism Camp Bonding (0 -> 100%)
+    var ranger = RangerCampEngine.createTrial(448, "Lucario")
+    ranger = RangerCampEngine.beginDrag(ranger, ranger.targetX + 0.22f, ranger.targetY)
+    val stepsPerLoop = 24
+    for (loop in 0 until ranger.loopsRequired) {
+      for (s in 1..stepsPerLoop) {
+        val theta = (s.toDouble() / stepsPerLoop.toDouble()) * 2.0 * kotlin.math.PI
+        val nx = (ranger.targetX + kotlin.math.cos(theta) * 0.22).toFloat()
+        val ny = (ranger.targetY + kotlin.math.sin(theta) * 0.22).toFloat()
+        ranger = RangerCampEngine.stepLoopDrag(ranger, nx, ny).nextState
+      }
+    }
+    assertTrue("4 full 360-degree Styler loops should capture Lucario", ranger.isCaptured)
+    assertEquals(1f, ranger.friendshipGauge, 0.01f)
+
+    var bond = 35
+    var camp = PrismCampState()
+    repeat(4) {
+      val (nextBond, nextCamp) = RangerCampEngine.performCampActivity(bond, CampActivityType.PRISM_CURRY, "Pikachu", camp)
+      bond = nextBond
+      camp = nextCamp
+    }
+    assertEquals(100, bond)
+    assertEquals(4, camp.activePartyMoodBoostNonce)
   }
 }

@@ -455,7 +455,7 @@ class OmniStudioUpgradeVerificationTest {
   }
 
   @Test
-  fun `offline room v4 repository auto-seeds Prism Resonance and roundtrips full JSON project export import`() {
+  fun `offline room v5 repository auto-seeds Prism Resonance and roundtrips full JSON project export import`() {
     runBlocking {
       val context = ApplicationProvider.getApplicationContext<Context>()
       val db = Room.inMemoryDatabaseBuilder(context, NativePokemonDatabase::class.java)
@@ -467,6 +467,7 @@ class OmniStudioUpgradeVerificationTest {
           customDexDao = db.customDexDao(),
           customAssetDao = db.customAssetDao(),
           studioPersistenceDao = db.studioPersistenceDao(),
+          customTrainerDao = db.customTrainerDao(),
         )
         val dao = db.studioPersistenceDao()
 
@@ -549,11 +550,51 @@ class OmniStudioUpgradeVerificationTest {
           )
         )
 
-        // 3. Export full project bundle to JSON & re-import as a new project in Room v4
+        // 2b. Save a custom protagonist Trainer before exporting so v5 JSON includes customTrainers
+        val trainerDao = db.customTrainerDao()
+        val customHero = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.copy(
+          name = "Sora Prime",
+          title = "Prism Champion",
+          appearance = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.appearance.copy(
+            headgear = com.example.engine.TrainerHeadgear.VISOR,
+            outfitStyle = com.example.engine.TrainerOutfitStyle.CHAMPION_CAPE,
+            outfitPrimaryHex = "#8B5CF6",
+            companionPoseIndex = 2,
+          ),
+        )
+        trainerDao.upsertCustomTrainer(
+          com.example.data.local.CustomTrainerEntity.fromTrainerSpec(customHero, projectId = seeded.id, isPlayerAvatar = true)
+        )
+
+        // 2c. Save Room v6 SideModeRecordEntity & verify MIGRATION_5_6 versioning
+        assertEquals(5, NativePokemonDatabase.MIGRATION_5_6.startVersion)
+        assertEquals(6, NativePokemonDatabase.MIGRATION_5_6.endVersion)
+        dao.upsertSideModeRecord(
+          com.example.data.local.SideModeRecordEntity(
+            projectId = seeded.id,
+            battleTowerBestStreak = 14,
+            battleTowerCurrentStreak = 7,
+            battlePoints = 48,
+            contestRibbonsWon = 3,
+            contestBestScore = 36,
+            bestSnapScore = 4320,
+            bestSnapStarRating = 4,
+            bestSnapCaption = "Pikachu (4★ Diamond • Illumina Aura ★)",
+            deepestRiftFloor = 5,
+            riftGuardiansDefeated = 2,
+            rangerCapturesCompleted = 5,
+            campMealsServed = 9,
+          )
+        )
+
+        // 3. Export full project bundle to Room v6 JSON & re-import as a new project
         val exportedJson = repo.exportProjectToJson(seeded.id).getOrThrow()
+        assertTrue(exportedJson.contains("pokefusion_studio_project_v6"))
+        assertTrue(exportedJson.contains("sideModeRecords"))
         assertTrue(exportedJson.contains("Prism Resonance"))
         assertTrue(exportedJson.contains("Test Rayquaza Rig"))
         assertTrue(exportedJson.contains("Prismwyrm"))
+        assertTrue(exportedJson.contains("Sora Prime"))
 
         val importedProject = repo.importProjectFromJson(exportedJson).getOrThrow()
         assertNotEquals(seeded.id, importedProject.id)
@@ -565,14 +606,44 @@ class OmniStudioUpgradeVerificationTest {
         assertNotNull(importedMap)
         val importedCampaign = dao.observeCampaignState(importedProject.id).first()
         assertEquals("johto", importedCampaign?.activeRegionId)
+        val importedTrainers = trainerDao.getTrainersForProjectSnapshot(importedProject.id)
+        assertEquals(1, importedTrainers.size)
+        assertEquals("Sora Prime", importedTrainers.first().name)
+        assertEquals(2, importedTrainers.first().companionPoseIndex)
+        val importedSideRecord = dao.getSideModeRecord(importedProject.id)
+        assertNotNull(importedSideRecord)
+        assertEquals(14, importedSideRecord!!.battleTowerBestStreak)
+        assertEquals(48, importedSideRecord.battlePoints)
+        assertEquals(3, importedSideRecord.contestRibbonsWon)
+        assertEquals(4320, importedSideRecord.bestSnapScore)
+        assertEquals(5, importedSideRecord.deepestRiftFloor)
+        assertEquals(5, importedSideRecord.rangerCapturesCompleted)
 
-        // 4. Full #0001-#1025 Offline National Atlas Index + ProceduralCreatureRigEngine Bitmap check
+        // 3b. Backward-compatible v4/v5 JSON import (without customTrainers / sideModeRecords keys) succeeds cleanly
+        val legacyV4Json = org.json.JSONObject(exportedJson).apply {
+          put("schemaVersion", 4)
+          put("format", "pokefusion_studio_project_v4")
+          remove("customTrainers")
+          remove("sideModeRecords")
+        }.toString()
+        val legacyImported = repo.importProjectFromJson(legacyV4Json).getOrThrow()
+        assertEquals(3, repo.observeProjects().first().size)
+        assertTrue(trainerDao.getTrainersForProjectSnapshot(legacyImported.id).isEmpty())
+        assertEquals(null, dao.getSideModeRecord(legacyImported.id))
+
+        // 4. Full #0001-#1025 Offline National Atlas Index + Unified Naming + ProceduralCreatureRigEngine Bitmap check
         val fullIndex = NationalAtlasIndex.initializeFromAssets(context)
         assertEquals(1025, fullIndex.size)
         assertEquals(1025, fullIndex.map { it.name }.toSet().size)
         assertTrue(fullIndex.none { it.name.startsWith("Species #") })
         assertTrue(fullIndex.all { it.epithet.isNotBlank() && it.baseStatTotal in 150..900 })
         assertTrue(fullIndex.sumOf { it.availableForms.size } > 1100)
+        // Unified primary naming: Pikachu #25 matches across Atlas and built-in catalog, preserving Prism alias underneath
+        val pikaAtlas = NationalAtlasIndex.peekSpecies(25)
+        assertEquals("Pikachu", pikaAtlas.name)
+        assertTrue("Expected non-blank Prism alias for Pikachu", pikaAtlas.prismAlias.isNotBlank())
+        assertEquals("Bulbasaur", NationalAtlasIndex.peekSpecies(1).name)
+        assertEquals("Rayquaza", NationalAtlasIndex.peekSpecies(384).name)
 
         // Verify Android ARGB_8888 transparent-backed Bitmaps render cleanly offline (2D + 3D Cel-Voxel)
         listOf(1, 6, 25, 94, 150, 249, 384, 448, 658, 1007, 1025).forEach { dex ->
@@ -588,18 +659,7 @@ class OmniStudioUpgradeVerificationTest {
           assertTrue((0 until 64).any { y -> (0 until 64).any { x -> Color.alpha(bmp3d.getPixel(x, y)) == 255 } })
         }
 
-        // 5. Room v5 custom_trainers CRUD + Trainer 2D Sprite / 3D Cel-Voxel / 40x40 Portrait Bitmap check
-        val trainerDao = db.customTrainerDao()
-        val customHero = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.copy(
-          appearance = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.appearance.copy(
-            headgear = com.example.engine.TrainerHeadgear.VISOR,
-            outfitStyle = com.example.engine.TrainerOutfitStyle.CHAMPION_CAPE,
-            outfitPrimaryHex = "#8B5CF6",
-          ),
-        )
-        trainerDao.upsertCustomTrainer(
-          com.example.data.local.CustomTrainerEntity.fromTrainerSpec(customHero, projectId = seeded.id, isPlayerAvatar = true)
-        )
+        // 5. Room v5 custom_trainers CRUD + Trainer 2D Sprite / 3D Cel-Voxel / Cached Voxel Slices / 40x40 Portrait check
         val restoredHero = trainerDao.getSavedProtagonist()
         assertNotNull(restoredHero)
         assertEquals("VISOR", restoredHero!!.headgearToken)
@@ -614,6 +674,11 @@ class OmniStudioUpgradeVerificationTest {
         assertEquals(64, tBmp3d.width)
         val tPortrait = com.example.engine.TrainerCatalogAndRigEngine.renderTrainerPortraitBitmap(customHero, scale = 2)
         assertEquals(80, tPortrait.width)
+
+        val slicesA = com.example.engine.TrainerCatalogAndRigEngine.renderTrainerVoxelSlices(customHero, sliceCount = 7, scale = 2)
+        val slicesB = com.example.engine.TrainerCatalogAndRigEngine.renderTrainerVoxelSlices(customHero, sliceCount = 7, scale = 2)
+        assertEquals(7, slicesA.size)
+        assertTrue("Voxel slices should hit bitmapCache cleanly", slicesA.first() === slicesB.first())
       } finally {
         db.close()
       }
@@ -713,5 +778,11 @@ class OmniStudioUpgradeVerificationTest {
       assertEquals("Chapter ${ch.id} BGM mismatch", ch.defaultBgmThemeId, ch.resolveBgmTheme().id)
       assertTrue("Chapter ${ch.id} missing ambient bed", ch.resolveAmbientBed() != com.example.engine.AmbientBedType.NONE)
     }
+
+    // 6. Verify 6-slot LRU BGM PCM cache caps memory cleanly and returns cached PCM without re-synth
+    assertTrue("BGM PCM LRU cache must stay capped at <= 6 entries", OmniHardwareAudioEngine.bgmPcmCacheSize() <= 6)
+    val cachedFirst = OmniHardwareAudioEngine.renderBgmLoopPcm(BgmThemeId.PRISM_TITLE, audioParams)
+    val cachedSecond = OmniHardwareAudioEngine.renderBgmLoopPcm(BgmThemeId.PRISM_TITLE, audioParams)
+    assertTrue("Repeated BGM render should return cached ShortArray instance", cachedFirst === cachedSecond)
   }
 }

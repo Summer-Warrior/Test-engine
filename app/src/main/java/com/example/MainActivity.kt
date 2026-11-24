@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * 100% Offline Room v4 Root Entrypoint — boots IMMEDIATELY into PokeFusionStudioWorkspace
+ * 100% Offline Room v5 Root Entrypoint — boots IMMEDIATELY into PokeFusionStudioWorkspace
  * with ZERO login wall, ZERO Firebase/Auth dependencies, and instant offline startup.
  */
 @Composable
@@ -139,6 +139,7 @@ fun PokeFusionRootApp() {
           customDexDao = localDb.customDexDao(),
           customAssetDao = localDb.customAssetDao(),
           studioPersistenceDao = localDb.studioPersistenceDao(),
+          customTrainerDao = localDb.customTrainerDao(),
         )
         StudioViewModel(
           appContext = app.applicationContext,
@@ -205,6 +206,7 @@ fun PokeFusionStudioWorkspace(
   val savedSprites by viewModel.savedSprites.collectAsStateWithLifecycle()
   val gameTestState by viewModel.gameTestState.collectAsStateWithLifecycle()
   val campaignState by viewModel.campaignState.collectAsStateWithLifecycle()
+  val sideModesState by viewModel.sideModesState.collectAsStateWithLifecycle()
   val studioItems by viewModel.studioItems.collectAsStateWithLifecycle()
   val atlasProgressMap by viewModel.atlasProgressMap.collectAsStateWithLifecycle()
 
@@ -256,7 +258,7 @@ fun PokeFusionStudioWorkspace(
       .replace(Regex("[^a-z0-9]+"), "_")
       .trim('_')
       .ifBlank { "pokefusion_studio_project" }
-    exportJsonLauncher.launch("${slug}_v4.json")
+    exportJsonLauncher.launch("${slug}_v6.json")
   }
 
   val launchImportJson: () -> Unit = {
@@ -280,6 +282,7 @@ fun PokeFusionStudioWorkspace(
   val customAssetsList = (customAssetsState as? UiState.Success)?.data ?: emptyList()
   val customDexList = (customDexState as? UiState.Success)?.data ?: emptyList()
   val localProjectsList = (cloudFanGamesState as? UiState.Success)?.data ?: emptyList()
+  val hydratedByDex = remember(nativePokemonList) { nativePokemonList.associateBy { it.dexNumber } }
 
   Scaffold(
     modifier = Modifier
@@ -401,7 +404,7 @@ fun PokeFusionStudioWorkspace(
                       overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                      text = "${hardwareState.convergedVisuals.activeCount}/${hardwareState.allPlatforms.size} HW • ${syncStatus.statusLabel} • Offline Room v5",
+                      text = "${hardwareState.convergedVisuals.activeCount}/${hardwareState.allPlatforms.size} HW • ${syncStatus.statusLabel} • Offline Room v6",
                       style = MaterialTheme.typography.labelSmall,
                       color = StudioTextSecondary,
                       maxLines = 1,
@@ -572,9 +575,15 @@ fun PokeFusionStudioWorkspace(
                   inspectTrainerMode = viewportInspectsTrainer,
                   selectedTrainer = selectedViewportTrainer,
                   playerTrainer = playerTrainer,
+                  playerCustomAvatarBitmap = spriteEditorState.playerCustomSpriteBitmap,
+                  useCustomPlayerAvatarBitmap = spriteEditorState.useCustomPlayerAvatarBitmap,
                   onToggleInspectTrainerMode = { viewModel.toggleViewportTrainerMode(it) },
                   onSelectViewportTrainer = { viewModel.selectTrainerForViewport(it) },
+                  onSelectProtagonistPreset = { preset -> viewModel.selectProtagonistPreset(preset) },
+                  onUpdateProtagonistIdentity = { name, title -> viewModel.updateProtagonistIdentity(name, title) },
                   onUpdateProtagonistAppearance = { transform -> viewModel.updateProtagonistAppearance(transform) },
+                  onEditHeroInSpriteEditor = { viewModel.editHeroInSpriteEditor(openTab = true) },
+                  onToggleUseCustomPlayerAvatar = { viewModel.toggleUseCustomPlayerAvatarBitmap() },
                   onSaveCustomTrainer = { spec -> viewModel.saveCustomTrainerToRoom(spec) },
                 )
               }
@@ -602,6 +611,8 @@ fun PokeFusionStudioWorkspace(
                   onClearFrame = { viewModel.clearCurrentSpriteFrame() },
                   onImportBitmap = { bmp, hint -> viewModel.importBitmapIntoSpriteEditor(bmp, hint) },
                   onLoadActiveSpeciesSeed = { viewModel.loadSeedIntoSpriteEditor(primaryPokemon) },
+                  onSampleHeroToEditor = { viewModel.editHeroInSpriteEditor(openTab = false) },
+                  onApplySpriteToHeroAvatar = { viewModel.applyCurrentSpriteToPlayerAvatar() },
                   onSaveSprite = { viewModel.saveCurrentSpriteToRoomAndCloud() },
                   onLoadSavedSprite = { viewModel.loadSavedSpriteFromRoom(it) },
                   onDeleteSavedSprite = { viewModel.deleteSavedSpriteFromRoom(it) },
@@ -686,11 +697,45 @@ fun PokeFusionStudioWorkspace(
                   onSummonWildPokemon = { viewModel.summonWildPokemonByDex(it) },
                   onAddPokemonToParty = { viewModel.addPokemonToActiveParty(it) },
                   playerTrainer = playerTrainer,
+                  playerCustomAvatarBitmap = spriteEditorState.playerCustomSpriteBitmap,
+                  useCustomPlayerAvatarBitmap = spriteEditorState.useCustomPlayerAvatarBitmap,
+                  hydratedByDex = hydratedByDex,
+                  onSelectProtagonistPreset = { preset -> viewModel.selectProtagonistPreset(preset) },
+                  onUpdateProtagonistIdentity = { name, title -> viewModel.updateProtagonistIdentity(name, title) },
+                  onUpdateProtagonistAppearance = { transform -> viewModel.updateProtagonistAppearance(transform) },
+                  onEditHeroInSpriteEditor = { viewModel.editHeroInSpriteEditor(openTab = true) },
+                  onToggleUseCustomPlayerAvatar = { viewModel.toggleUseCustomPlayerAvatarBitmap() },
+                  onSaveHeroToRoom = { spec -> viewModel.saveCustomTrainerToRoom(spec) },
                   onDismissVsBanner = { viewModel.dismissTrainerVsBanner() },
                   onToggleTrailingPartner = { viewModel.toggleTrailingPartner() },
                   onOpenTrainerStudio = { viewModel.openHeroCustomizerInViewport() },
                   onToggleAmbientBed = { viewModel.toggleAmbientBed() },
                   onPlaySfx = { viewModel.playSfx(it) },
+                  sideModesState = sideModesState,
+                  onSelectSideMode = { viewModel.selectSideMode(it) },
+                  onStartTowerGauntlet = { viewModel.startBattleTowerGauntlet() },
+                  onExecuteTowerMove = { viewModel.executeBattleTowerMove(it) },
+                  onSwitchTowerSlot = { viewModel.switchBattleTowerSlot(it) },
+                  onAdvanceTowerRound = { viewModel.advanceBattleTowerRound() },
+                  onRedeemBpReward = { viewModel.redeemBattleTowerBpReward(it) },
+                  onStartContest = { viewModel.startPrismContest(it) },
+                  onPerformContestAppeal = { viewModel.performPrismContestAppeal(it) },
+                  onStepSnapFrame = { viewModel.stepLentalSnapFrame() },
+                  onTossSnapIlluminaOrb = { viewModel.tossSnapIlluminaOrb() },
+                  onTossSnapApple = { viewModel.tossSnapApple() },
+                  onNextSnapSubject = { viewModel.nextSnapSubject() },
+                  onCaptureSnapPhoto = { viewModel.captureLentalSnapPhoto() },
+                  onStartRiftDungeon = { viewModel.startMysteryRiftDungeon() },
+                  onStepRiftDirection = { dr, dc -> viewModel.stepMysteryRift(dr, dc) },
+                  onUseRiftPrismPulse = { viewModel.stepMysteryRift(0, 0, useSignatureSkill = true) },
+                  onUseRiftOranBerry = { viewModel.useMysteryRiftOranBerry() },
+                  onStepRangerWild = { viewModel.stepRangerWildMovement() },
+                  onBeginRangerDrag = { x, y -> viewModel.beginRangerLoopDrag(x, y) },
+                  onStepRangerDrag = { x, y -> viewModel.stepRangerLoopDrag(x, y) },
+                  onEndRangerDrag = { viewModel.endRangerLoopDrag() },
+                  onNextRangerTarget = { viewModel.selectNextRangerTarget() },
+                  onRecruitRangerTarget = { viewModel.recruitRangerTargetToParty() },
+                  onPerformCampActivity = { viewModel.performPrismCampActivity(it) },
                 )
               }
 

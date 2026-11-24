@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -35,11 +36,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -66,6 +69,7 @@ import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.SuperFxGold
 import com.example.ui.theme.VoxelViolet
+import kotlin.math.floor
 import kotlin.math.sin
 
 /**
@@ -82,21 +86,35 @@ fun TrainerCharacterRenderer(
   walkFrameIndex: Int = 0,
   cameraYawDegrees: Float = 20f,
   flipHorizontal: Boolean = false,
+  customAvatarBitmap: Bitmap? = null,
   modifier: Modifier = Modifier,
 ) {
   val infinite = rememberInfiniteTransition(label = "trainer_rig_anim")
-  val idlePhase by infinite.animateFloat(
+  val rawIdlePhase by infinite.animateFloat(
     initialValue = 0f,
     targetValue = 1f,
     animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart),
     label = "trainer_idle",
   )
 
-  val sprite2dBmp = remember(trainer.id, trainer.appearance, pose, walkFrameIndex) {
-    TrainerCatalogAndRigEngine.renderTrainerSpriteBitmap(trainer, pose, walkFrameIndex, scale = 4).asImageBitmap()
+  // Step idle motion according to hardware characterStepFps (authentic 12-16fps retro cadence or 60fps Fluid Motion)
+  val stepFps = (visuals?.characterStepFps ?: 16).coerceIn(8, 60)
+  val stepsPerCycle = ((stepFps * 2.4f).toInt()).coerceAtLeast(8)
+  val idlePhase = if (stepFps >= 55) rawIdlePhase else floor(rawIdlePhase * stepsPerCycle) / stepsPerCycle
+
+  val sprite2dBmp = remember(trainer.id, trainer.appearance, pose, walkFrameIndex, customAvatarBitmap) {
+    if (customAvatarBitmap != null) {
+      customAvatarBitmap.asImageBitmap()
+    } else {
+      TrainerCatalogAndRigEngine.renderTrainerSpriteBitmap(trainer, pose, walkFrameIndex, scale = 4).asImageBitmap()
+    }
   }
-  val voxel3dBmp = remember(trainer.id, trainer.appearance, pose, cameraYawDegrees) {
-    TrainerCatalogAndRigEngine.renderTrainerCelVoxelBitmap(trainer, pose, cameraYawDegrees, scale = 4).asImageBitmap()
+  val voxel3dBmp = remember(trainer.id, trainer.appearance, pose, cameraYawDegrees, customAvatarBitmap) {
+    if (customAvatarBitmap != null) {
+      customAvatarBitmap.asImageBitmap()
+    } else {
+      TrainerCatalogAndRigEngine.renderTrainerCelVoxelBitmap(trainer, pose, cameraYawDegrees, scale = 4).asImageBitmap()
+    }
   }
   val voxelSlices = remember(trainer.id, trainer.appearance, pose, characterMixMode) {
     if (characterMixMode == CharacterMixMode.VOXELIZER_FX_3D) {
@@ -186,23 +204,52 @@ fun TrainerCharacterRenderer(
           }
         }
         CharacterMixMode.SPLIT_BEAM_MORPH -> {
-          // Cross-faded 2D crisp sprite layered cleanly with 3D cel-voxel depth rig
-          Image(
-            bitmap = voxel3dBmp,
-            contentDescription = null,
-            filterQuality = FilterQuality.None,
-            contentScale = ContentScale.Fit,
-            alpha = 0.72f,
-            modifier = Modifier.fillMaxSize(),
-          )
+          // Crisp clipRect left/right 2D ⇄ 3D split with glowing vertical Split-Beam (zero ghosting)
+          val splitFraction = (0.50f + sin(idlePhase * 6.283f) * 0.22f).coerceIn(0.24f, 0.76f)
           Image(
             bitmap = sprite2dBmp,
-            contentDescription = "${trainer.name} Split-Beam 2D/3D rig",
+            contentDescription = "${trainer.name} 2D Split-Beam left half",
             filterQuality = FilterQuality.None,
             contentScale = ContentScale.Fit,
-            alpha = 0.82f,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+              .fillMaxSize()
+              .drawWithContent {
+                clipRect(left = 0f, top = 0f, right = size.width * splitFraction, bottom = size.height) {
+                  this@drawWithContent.drawContent()
+                }
+              },
           )
+          Image(
+            bitmap = voxel3dBmp,
+            contentDescription = "${trainer.name} 3D Split-Beam right half",
+            filterQuality = FilterQuality.None,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+              .fillMaxSize()
+              .drawWithContent {
+                clipRect(left = size.width * splitFraction, top = 0f, right = size.width, bottom = size.height) {
+                  this@drawWithContent.drawContent()
+                }
+              },
+          )
+          // Glowing vertical Prism Split-Beam laser
+          Canvas(modifier = Modifier.fillMaxSize()) {
+            val bx = size.width * splitFraction
+            drawLine(
+              brush = Brush.verticalGradient(
+                listOf(Color.Transparent, CyberCyan.copy(alpha = 0.7f), SuperFxGold.copy(alpha = 0.8f), CyberCyan.copy(alpha = 0.7f), Color.Transparent),
+              ),
+              start = Offset(bx, size.height * 0.06f),
+              end = Offset(bx, size.height * 0.94f),
+              strokeWidth = 7f,
+            )
+            drawLine(
+              color = Color.White.copy(alpha = 0.92f),
+              start = Offset(bx, size.height * 0.10f),
+              end = Offset(bx, size.height * 0.90f),
+              strokeWidth = 2f,
+            )
+          }
         }
       }
     }

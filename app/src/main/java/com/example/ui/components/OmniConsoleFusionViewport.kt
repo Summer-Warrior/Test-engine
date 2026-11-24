@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,8 +60,6 @@ import com.example.data.model.MasterDisciplineMode
 import com.example.engine.TrainerAppearanceConfig
 import com.example.engine.TrainerCatalogAndRigEngine
 import com.example.engine.TrainerCharacterSpec
-import com.example.engine.TrainerHeadgear
-import com.example.engine.TrainerOutfitStyle
 import com.example.engine.TrainerPose
 import com.example.ui.HardwareRegistryUiState
 import com.example.ui.shaders.omniDisplayPostEffect
@@ -104,9 +101,15 @@ fun OmniConsoleFusionViewport(
   inspectTrainerMode: Boolean = false,
   selectedTrainer: TrainerCharacterSpec = TrainerCatalogAndRigEngine.defaultProtagonist,
   playerTrainer: TrainerCharacterSpec = TrainerCatalogAndRigEngine.defaultProtagonist,
+  playerCustomAvatarBitmap: Bitmap? = null,
+  useCustomPlayerAvatarBitmap: Boolean = false,
   onToggleInspectTrainerMode: (Boolean) -> Unit = {},
   onSelectViewportTrainer: (TrainerCharacterSpec) -> Unit = {},
+  onSelectProtagonistPreset: (TrainerCharacterSpec) -> Unit = {},
+  onUpdateProtagonistIdentity: (String, String) -> Unit = { _, _ -> },
   onUpdateProtagonistAppearance: ((TrainerAppearanceConfig) -> TrainerAppearanceConfig) -> Unit = {},
+  onEditHeroInSpriteEditor: () -> Unit = {},
+  onToggleUseCustomPlayerAvatar: () -> Unit = {},
   onSaveCustomTrainer: (TrainerCharacterSpec) -> Unit = {},
 ) {
   val visuals = hardwareState.convergedVisuals
@@ -251,12 +254,14 @@ fun OmniConsoleFusionViewport(
             )
 
             if (inspectTrainerMode) {
+              val isInspectingHero = activeStageTrainer.id == playerTrainer.id
               TrainerCharacterRenderer(
                 trainer = activeStageTrainer,
                 pose = selectedTrainerPose,
                 characterMixMode = hardwareState.characterMixMode,
                 visuals = visuals,
                 cameraYawDegrees = (config.pixelTo3dBlend - 0.5f) * 70f,
+                customAvatarBitmap = if (isInspectingHero && useCustomPlayerAvatarBitmap) playerCustomAvatarBitmap else null,
                 modifier = Modifier
                   .align(Alignment.Center)
                   .size(188.dp),
@@ -391,123 +396,27 @@ fun OmniConsoleFusionViewport(
             }
           }
 
-          // Live Protagonist Customizer (drives Overworld Hero + Battle Hero + Room v5 custom_trainers)
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .clip(RoundedCornerShape(12.dp))
-              .background(StudioDeepNavy)
-              .border(1.dp, SuperFxGold.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-              .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Text(
-                text = "PROTAGONIST CUSTOMIZER (${playerTrainer.name.uppercase()})",
-                style = MaterialTheme.typography.labelSmall,
-                color = SuperFxGold,
-                fontWeight = FontWeight.Bold,
-              )
-              Button(
-                onClick = { onSaveCustomTrainer(activeStageTrainer) },
-                colors = ButtonDefaults.buttonColors(containerColor = SgbEmerald, contentColor = StudioDeepNavy),
-                modifier = Modifier.testTag("save_custom_trainer_room_button"),
-              ) {
-                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Save to Room", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-              }
-            }
-
-            // Outfit Palette Presets
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              TrainerCatalogAndRigEngine.outfitPalettePresets.forEach { (label, triple) ->
-                val active = playerTrainer.appearance.outfitPrimaryHex.equals(triple.first, ignoreCase = true)
-                FilterChip(
-                  selected = active,
-                  onClick = {
-                    onSelectViewportTrainer(playerTrainer)
-                    onUpdateProtagonistAppearance {
-                      it.copy(
-                        outfitPrimaryHex = triple.first,
-                        outfitSecondaryHex = triple.second,
-                        accentHex = triple.third,
-                      )
-                    }
-                  },
-                  label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                )
-              }
-            }
-
-            // Headgear Selector
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              TrainerHeadgear.entries.forEach { gear ->
-                FilterChip(
-                  selected = playerTrainer.appearance.headgear == gear,
-                  onClick = {
-                    onSelectViewportTrainer(playerTrainer)
-                    onUpdateProtagonistAppearance { it.copy(headgear = gear) }
-                  },
-                  label = { Text(gear.label, style = MaterialTheme.typography.labelSmall) },
-                  modifier = Modifier.testTag("customizer_headgear_${gear.name.lowercase()}"),
-                )
-              }
-            }
-
-            // Outfit Style Selector
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              TrainerOutfitStyle.entries.forEach { style ->
-                FilterChip(
-                  selected = playerTrainer.appearance.outfitStyle == style,
-                  onClick = {
-                    onSelectViewportTrainer(playerTrainer)
-                    onUpdateProtagonistAppearance { it.copy(outfitStyle = style) }
-                  },
-                  label = { Text(style.label, style = MaterialTheme.typography.labelSmall) },
-                  modifier = Modifier.testTag("customizer_outfit_${style.name.lowercase()}"),
-                )
-              }
-            }
-
-            // Hair Color + Hair Style
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              TrainerCatalogAndRigEngine.hairColorPresets.forEachIndexed { idx, (label, hex) ->
-                FilterChip(
-                  selected = playerTrainer.appearance.hairHex.equals(hex, ignoreCase = true),
-                  onClick = {
-                    onSelectViewportTrainer(playerTrainer)
-                    onUpdateProtagonistAppearance { it.copy(hairHex = hex, hairStyleIndex = idx % 6) }
-                  },
-                  label = { Text("Hair: $label", style = MaterialTheme.typography.labelSmall) },
-                )
-              }
-            }
-          }
+          // Complete Protagonist Wardrobe & Avatar Studio (Name, Title, Presets, Skin, Hair, Headgear, Outfit, Palette, Pose, Pixel Editor)
+          ProtagonistWardrobePanel(
+            playerTrainer = playerTrainer,
+            playerCustomAvatarBitmap = playerCustomAvatarBitmap,
+            useCustomPlayerAvatarBitmap = useCustomPlayerAvatarBitmap,
+            onSelectProtagonistPreset = { preset ->
+              onSelectProtagonistPreset(preset)
+              onSelectViewportTrainer(preset)
+            },
+            onUpdateProtagonistIdentity = { name, title ->
+              onSelectViewportTrainer(playerTrainer)
+              onUpdateProtagonistIdentity(name, title)
+            },
+            onUpdateProtagonistAppearance = { transform ->
+              onSelectViewportTrainer(playerTrainer)
+              onUpdateProtagonistAppearance(transform)
+            },
+            onEditHeroInSpriteEditor = onEditHeroInSpriteEditor,
+            onToggleUseCustomPlayerAvatar = onToggleUseCustomPlayerAvatar,
+            onSaveHeroToRoom = { onSaveCustomTrainer(activeStageTrainer) },
+          )
         }
 
         // 4 Non-Muddy Character Mix Mode Selector + Custom Sprite Toggle

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
@@ -76,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.local.NativePokemonEntity
 import com.example.data.local.SavedSpriteEntity
 import com.example.engine.SpritePixelMatrixEngine
+import com.example.ui.SpriteEditTarget
 import com.example.ui.SpriteEditorUiState
 import com.example.ui.SpriteToolMode
 import com.example.ui.theme.CyberCyan
@@ -120,6 +122,8 @@ fun SpriteEditorSection(
   onClearFrame: () -> Unit,
   onImportBitmap: (android.graphics.Bitmap, String?) -> Unit,
   onLoadActiveSpeciesSeed: () -> Unit,
+  onSampleHeroToEditor: () -> Unit = {},
+  onApplySpriteToHeroAvatar: () -> Unit = {},
   onSaveSprite: () -> Unit,
   onLoadSavedSprite: (SavedSpriteEntity) -> Unit,
   onDeleteSavedSprite: (String) -> Unit,
@@ -285,7 +289,15 @@ fun SpriteEditorSection(
             ) {
               Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = CyberCyan)
               Spacer(modifier = Modifier.width(4.dp))
-              Text("Sample Rig", color = CyberCyan)
+              Text("Creature", color = CyberCyan)
+            }
+            OutlinedButton(
+              onClick = onSampleHeroToEditor,
+              modifier = Modifier.testTag("sprite_sample_hero_button"),
+            ) {
+              Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp), tint = SuperFxGold)
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Hero", color = SuperFxGold)
             }
             OutlinedButton(
               onClick = {
@@ -295,11 +307,38 @@ fun SpriteEditorSection(
               },
               modifier = Modifier.testTag("sprite_import_photo_button"),
             ) {
-              Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp), tint = SuperFxGold)
+              Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp), tint = VoxelViolet)
               Spacer(modifier = Modifier.width(4.dp))
-              Text("Import", color = SuperFxGold)
+              Text("Photo", color = VoxelViolet)
             }
           }
+        }
+
+        // Active Sprite Target Indicator (Creature Rig vs Player Hero Avatar — isolated bitmaps!)
+        val isHeroTarget = editorState.editingTarget == SpriteEditTarget.PLAYER_AVATAR
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isHeroTarget) SuperFxGold.copy(alpha = 0.14f) else CyberCyan.copy(alpha = 0.12f))
+            .border(1.dp, if (isHeroTarget) SuperFxGold.copy(alpha = 0.65f) else CyberCyan.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = if (isHeroTarget) {
+              "TARGET: PLAYER HERO AVATAR (Overworld & Battle Hero — Creature Rig untouched)"
+            } else {
+              "TARGET: CREATURE RIG (#${activePokemon.dexNumber} ${activePokemon.name} — Hero Avatar untouched)"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isHeroTarget) SuperFxGold else CyberCyan,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
         }
 
         // Editable Sprite Name
@@ -499,7 +538,7 @@ fun SpriteEditorSection(
           },
         )
 
-        // Save Actions
+        // Save & Apply Actions
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -514,20 +553,30 @@ fun SpriteEditorSection(
           ) {
             Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(if (isSaving) "Saving..." else "Save to Local Vault", fontWeight = FontWeight.Bold)
+            Text(if (isSaving) "Saving..." else "Save to Vault", fontWeight = FontWeight.Bold)
           }
           OutlinedButton(
-            onClick = {
-              val p1 = SpritePixelMatrixEngine.argbLongToHex(editorState.paletteArgb.getOrElse(0) { 0xFF00F5D4 })
-              val p2 = SpritePixelMatrixEngine.argbLongToHex(editorState.paletteArgb.getOrElse(1) { 0xFFFF2A85 })
-              onApplyPaletteToSpecies(p1, p2)
-            },
+            onClick = onApplySpriteToHeroAvatar,
             modifier = Modifier
               .weight(1f)
-              .testTag("sprite_apply_palette_species_button"),
+              .testTag("sprite_apply_to_hero_button"),
           ) {
-            Text("Apply Palette to #${activePokemon.dexNumber}", color = VoxelViolet)
+            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(15.dp), tint = SuperFxGold)
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Apply to Hero", color = SuperFxGold)
           }
+        }
+        OutlinedButton(
+          onClick = {
+            val p1 = SpritePixelMatrixEngine.argbLongToHex(editorState.paletteArgb.getOrElse(0) { 0xFF00E5FF })
+            val p2 = SpritePixelMatrixEngine.argbLongToHex(editorState.paletteArgb.getOrElse(1) { 0xFFFF2A85 })
+            onApplyPaletteToSpecies(p1, p2)
+          },
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("sprite_apply_palette_species_button"),
+        ) {
+          Text("Apply Palette to #${activePokemon.dexNumber} ${activePokemon.name}", color = VoxelViolet)
         }
       }
     }

@@ -34,14 +34,21 @@ enum class SpriteToolMode(val label: String) {
   EYEDROPPER("Picker"),
 }
 
+enum class SpriteEditTarget(val label: String) {
+  CREATURE("Creature Rig"),
+  PLAYER_AVATAR("Player Hero Avatar"),
+}
+
 /**
  * Hoisted Sprite Editor state so switching tabs NEVER loses user pixel frames, palette edits, or undo history.
+ * Keeps Creature custom bitmap strictly separate from the Player Hero custom avatar bitmap.
  */
 data class SpriteEditorUiState(
   val seedDexNumber: Int = 384,
   val spriteName: String = "Rayquaza Omni-Sprite",
   val activeSavedSpriteId: String? = null,
-  val paletteArgb: List<Long> = SpritePixelMatrixEngine.buildInitialPalette("#10B981", "#FFD166"),
+  val editingTarget: SpriteEditTarget = SpriteEditTarget.CREATURE,
+  val paletteArgb: List<Long> = SpritePixelMatrixEngine.buildInitialPalette("#10B981", "#FFB300"),
   val selectedColorSlot: Int = 0,
   val frames: List<List<Int>> = listOf(
     SpritePixelMatrixEngine.generateSeededFrame(384, 0),
@@ -56,6 +63,8 @@ data class SpriteEditorUiState(
   val previewFps: Int = 6,
   val useCustomBitmapInViewport: Boolean = false,
   val renderedPreviewBitmap: Bitmap? = null,
+  val playerCustomSpriteBitmap: Bitmap? = null,
+  val useCustomPlayerAvatarBitmap: Boolean = false,
 ) {
   val currentFrame: List<Int>
     get() = frames.getOrElse(activeFrameIndex) { List(SpritePixelMatrixEngine.PIXEL_COUNT) { -1 } }

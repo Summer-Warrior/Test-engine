@@ -7,10 +7,10 @@ val StudioSurfaceDark = Color(0xFF121826)
 val StudioCardDark = Color(0xFF1A2235)
 val StudioBorderDark = Color(0xFF28354E)
 
-val CyberCyan = Color(0xFF00F5D4)
+val CyberCyan = Color(0xFF00E5FF)
 val ElectricCrimson = Color(0xFFFF2A85)
-val SuperFxGold = Color(0xFFFFD166)
-val VoxelViolet = Color(0xFFA855F7)
+val SuperFxGold = Color(0xFFFFB300)
+val VoxelViolet = Color(0xFFB388FF)
 val SgbEmerald = Color(0xFF10B981)
 val Mode7Sky = Color(0xFF38BDF8)
 

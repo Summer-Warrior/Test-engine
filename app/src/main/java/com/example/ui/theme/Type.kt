@@ -62,13 +62,13 @@ val Typography = Typography(
     lineHeight = 18.sp,
   ),
   labelLarge = TextStyle(
-    fontFamily = JetBrainsMonoFamily,
+    fontFamily = SpaceGroteskFamily,
     fontWeight = FontWeight.Medium,
     fontSize = 12.sp,
     lineHeight = 16.sp,
   ),
   labelSmall = TextStyle(
-    fontFamily = JetBrainsMonoFamily,
+    fontFamily = SpaceGroteskFamily,
     fontWeight = FontWeight.Normal,
     fontSize = 10.sp,
     lineHeight = 14.sp,

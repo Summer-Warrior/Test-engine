@@ -435,7 +435,7 @@ internal object MainlineRegionChaptersCatalog {
         RegionPointOfInterest(
           id = "unova_eng", name = "Skyarrow Chief Volt", roleBadge = "PWT RELAY",
           col = 6, row = 10, interactionKind = PoiInteractionKind.HEALER_OR_LORE,
-          dialogue = "Skyarrow Bridge carries all 156 hardware audio buses! Heal here (H) before crossing to Dragonspiral Spire!",
+          dialogue = "Skyarrow Bridge carries harmonic resonance currents from across the realm! Rest at the Plaza before crossing to Dragonspiral Spire!",
           accentHex = "#00F5D4", trainerArchetypeId = "tr_engineer",
         ),
         RegionPointOfInterest(
