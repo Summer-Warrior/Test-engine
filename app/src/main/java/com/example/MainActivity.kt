@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * 100% Offline Room v5 Root Entrypoint — boots IMMEDIATELY into PokeFusionStudioWorkspace
+ * 100% Offline Room v6 Root Entrypoint — boots IMMEDIATELY into PokeFusionStudioWorkspace
  * with ZERO login wall, ZERO Firebase/Auth dependencies, and instant offline startup.
  */
 @Composable
@@ -209,6 +209,8 @@ fun PokeFusionStudioWorkspace(
   val sideModesState by viewModel.sideModesState.collectAsStateWithLifecycle()
   val studioItems by viewModel.studioItems.collectAsStateWithLifecycle()
   val atlasProgressMap by viewModel.atlasProgressMap.collectAsStateWithLifecycle()
+  val compiledRoms by viewModel.compiledRoms.collectAsStateWithLifecycle()
+  var pendingExportRom by remember { mutableStateOf<com.example.engine.PrismRomCartridge?>(null) }
 
   // Android Storage Access Framework JSON Project Export Launcher (zero broad storage permissions)
   val exportJsonLauncher = rememberLauncherForActivityResult(
@@ -263,6 +265,88 @@ fun PokeFusionStudioWorkspace(
 
   val launchImportJson: () -> Unit = {
     importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+  }
+
+  // Android SAF `.prismrom` Cartridge Export Launcher (zero broad storage permissions)
+  val exportRomLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+  ) { uri ->
+    val targetRom = pendingExportRom
+    pendingExportRom = null
+    if (uri != null && targetRom != null) {
+      scope.launch {
+        try {
+          val romPayload = viewModel.exportPrismRomJson(targetRom.romId).getOrThrow()
+          withContext(Dispatchers.IO) {
+            context.contentResolver.openOutputStream(uri)?.use { stream ->
+              stream.write(romPayload.toByteArray(Charsets.UTF_8))
+              stream.flush()
+            } ?: error("Unable to open output stream for .prismrom file.")
+          }
+          viewModel.notifyStatusBanner("Exported '${targetRom.editionSubtitle}' (.prismrom) cleanly.")
+        } catch (t: Throwable) {
+          viewModel.notifyStatusBanner("ROM export failed: ${t.message}")
+        }
+      }
+    }
+  }
+
+  // Android SAF `.prismrom` Cartridge Import Launcher
+  val importRomLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenDocument(),
+  ) { uri ->
+    if (uri != null) {
+      scope.launch {
+        try {
+          val raw = withContext(Dispatchers.IO) {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+              stream.bufferedReader(Charsets.UTF_8).readText()
+            } ?: error("Unable to read selected .prismrom file.")
+          }
+          viewModel.importPrismRomJson(raw)
+        } catch (t: Throwable) {
+          viewModel.notifyStatusBanner("ROM import failed: ${t.message}")
+        }
+      }
+    }
+  }
+
+  val launchExportPrismRom: (com.example.engine.PrismRomCartridge) -> Unit = { rom ->
+    pendingExportRom = rom
+    exportRomLauncher.launch("${com.example.engine.PrismRomPackageEngine.sanitizeRomSlug(rom.romId)}.prismrom")
+  }
+
+  val launchImportPrismRom: () -> Unit = {
+    importRomLauncher.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
+  }
+
+  val launchStandaloneRom: (com.example.engine.PrismRomCartridge) -> Unit = { rom ->
+    try {
+      val romFile = com.example.engine.PrismRomPackageEngine.saveRomToLibrary(context, rom)
+      val intent = com.example.engine.PrismRomPackageEngine.buildLaunchIntent(
+        context = context,
+        romId = rom.romId,
+        romPath = romFile.absolutePath,
+      )
+      context.startActivity(intent)
+      viewModel.notifyStatusBanner("Launched standalone '${rom.editionSubtitle}' in its own task window!")
+    } catch (t: Throwable) {
+      viewModel.notifyStatusBanner("Failed to launch standalone ROM: ${t.message}")
+    }
+  }
+
+  val installRomHomeShortcut: (com.example.engine.PrismRomCartridge) -> Unit = { rom ->
+    when (com.example.engine.PrismRomPackageEngine.requestPinRomHomeShortcut(context, rom)) {
+      com.example.engine.PinShortcutOutcome.PIN_REQUESTED -> {
+        viewModel.notifyStatusBanner("Requested Home-Screen shortcut icon for '${rom.shortShortcutLabel}'!")
+      }
+      com.example.engine.PinShortcutOutcome.NOT_SUPPORTED_ON_LAUNCHER -> {
+        viewModel.notifyStatusBanner("Current launcher does not support pinned shortcuts; use Launch Standalone instead.")
+      }
+      com.example.engine.PinShortcutOutcome.FAILED -> {
+        viewModel.notifyStatusBanner("Could not install Home-Screen icon for '${rom.shortShortcutLabel}'.")
+      }
+    }
   }
 
   // Clean audio lifecycle management (stop active BGM cleanly on background)
@@ -736,6 +820,15 @@ fun PokeFusionStudioWorkspace(
                   onNextRangerTarget = { viewModel.selectNextRangerTarget() },
                   onRecruitRangerTarget = { viewModel.recruitRangerTargetToParty() },
                   onPerformCampActivity = { viewModel.performPrismCampActivity(it) },
+                  compiledRoms = compiledRoms,
+                  activeProjectTitle = activeProject?.title ?: "Pokémon: Prism Resonance",
+                  onGenerateAllTenRoms = { viewModel.generateAllTenComparisonRoms() },
+                  onCompileCurrentStudioRom = { viewModel.compileCurrentStudioRom() },
+                  onImportPrismRom = launchImportPrismRom,
+                  onLaunchStandaloneRom = launchStandaloneRom,
+                  onInstallHomeShortcut = installRomHomeShortcut,
+                  onExportPrismRom = launchExportPrismRom,
+                  onDeleteCompiledRom = { viewModel.deleteCompiledRom(it) },
                 )
               }
 
@@ -770,6 +863,15 @@ fun PokeFusionStudioWorkspace(
                   onSeedStarterProjects = { viewModel.seedStarterCloudFanGames() },
                   onExportActiveProjectJson = launchExportJson,
                   onImportProjectJson = launchImportJson,
+                  compiledRoms = compiledRoms,
+                  activeProjectTitle = activeProject?.title ?: "Pokémon: Prism Resonance",
+                  onGenerateAllTenRoms = { viewModel.generateAllTenComparisonRoms() },
+                  onCompileCurrentStudioRom = { viewModel.compileCurrentStudioRom() },
+                  onImportPrismRom = launchImportPrismRom,
+                  onLaunchStandaloneRom = launchStandaloneRom,
+                  onInstallHomeShortcut = installRomHomeShortcut,
+                  onExportPrismRom = launchExportPrismRom,
+                  onDeleteCompiledRom = { viewModel.deleteCompiledRom(it) },
                 )
               }
 

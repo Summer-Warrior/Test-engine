@@ -3,7 +3,9 @@ package com.example.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -725,32 +728,37 @@ fun RangerAndCampPlaymat(
         val spriteDp = 64.dp
         val spritePx = with(androidx.compose.ui.platform.LocalDensity.current) { spriteDp.toPx() }
 
+        val latestBeginDrag by rememberUpdatedState(onBeginDrag)
+        val latestStepDrag by rememberUpdatedState(onStepDrag)
+        val latestEndDrag by rememberUpdatedState(onEndDrag)
+
         Canvas(
           modifier = Modifier
             .fillMaxSize()
             .pointerInput(rangerState.targetDex, rangerState.isCaptured) {
-              detectDragGestures(
-                onDragStart = { start ->
-                  trailPoints.clear()
-                  trailPoints.add(start)
-                  onBeginDrag((start.x / size.width).coerceIn(0f, 1f), (start.y / size.height).coerceIn(0f, 1f))
-                },
-                onDragEnd = {
-                  trailPoints.clear()
-                  onEndDrag()
-                },
-                onDragCancel = {
-                  trailPoints.clear()
-                  onEndDrag()
-                },
-                onDrag = { change, _ ->
+              awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                val start = down.position
+                trailPoints.clear()
+                trailPoints.add(start)
+                latestBeginDrag(
+                  (start.x / size.width).coerceIn(0f, 1f),
+                  (start.y / size.height).coerceIn(0f, 1f),
+                )
+                drag(down.id) { change ->
                   change.consume()
                   val pos = change.position
                   trailPoints.add(pos)
                   if (trailPoints.size > 48) trailPoints.removeAt(0)
-                  onStepDrag((pos.x / size.width).coerceIn(0f, 1f), (pos.y / size.height).coerceIn(0f, 1f))
-                },
-              )
+                  latestStepDrag(
+                    (pos.x / size.width).coerceIn(0f, 1f),
+                    (pos.y / size.height).coerceIn(0f, 1f),
+                  )
+                }
+                trailPoints.clear()
+                latestEndDrag()
+              }
             },
         ) {
           val targetCenter = Offset(rangerState.targetX * size.width, rangerState.targetY * size.height)

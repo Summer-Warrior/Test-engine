@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
@@ -129,6 +130,7 @@ import kotlin.math.abs
 
 private enum class GameTestHudPanel {
   SIDE_MODES,
+  ROMS,
   HARDWARE,
   AUDIO,
   REGIONS,
@@ -231,6 +233,16 @@ fun GameTestSection(
   onNextRangerTarget: () -> Unit = {},
   onRecruitRangerTarget: () -> Unit = {},
   onPerformCampActivity: (CampActivityType) -> Unit = {},
+  compiledRoms: List<com.example.engine.PrismRomCartridge> = emptyList(),
+  activeProjectTitle: String = "Pokémon: Prism Resonance",
+  onGenerateAllTenRoms: () -> Unit = {},
+  onCompileCurrentStudioRom: () -> Unit = {},
+  onImportPrismRom: () -> Unit = {},
+  onLaunchStandaloneRom: (com.example.engine.PrismRomCartridge) -> Unit = {},
+  onInstallHomeShortcut: (com.example.engine.PrismRomCartridge) -> Unit = {},
+  onExportPrismRom: (com.example.engine.PrismRomCartridge) -> Unit = {},
+  onDeleteCompiledRom: (String) -> Unit = {},
+  isStandaloneRomPlayer: Boolean = false,
 ) {
   val haptics = LocalHapticFeedback.current
   val visuals = hardwareState.convergedVisuals
@@ -449,14 +461,24 @@ fun GameTestSection(
             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = VoxelViolet.copy(alpha = 0.26f), selectedLabelColor = VoxelViolet),
             modifier = Modifier.testTag("hud_toggle_summoner"),
           )
-          FilterChip(
-            selected = activeHudPanel == GameTestHudPanel.HARDWARE,
-            onClick = { toggleHudPanel(GameTestHudPanel.HARDWARE) },
-            leadingIcon = { Icon(Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(15.dp)) },
-            label = { Text("Hardware", style = MaterialTheme.typography.labelSmall) },
-            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SgbEmerald.copy(alpha = 0.22f), selectedLabelColor = SgbEmerald),
-            modifier = Modifier.testTag("hud_toggle_hardware"),
-          )
+          if (!isStandaloneRomPlayer) {
+            FilterChip(
+              selected = activeHudPanel == GameTestHudPanel.ROMS,
+              onClick = { toggleHudPanel(GameTestHudPanel.ROMS) },
+              leadingIcon = { Icon(Icons.Default.SportsEsports, contentDescription = null, modifier = Modifier.size(15.dp)) },
+              label = { Text("ROMs (${compiledRoms.size})", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) },
+              colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SuperFxGold.copy(alpha = 0.28f), selectedLabelColor = SuperFxGold),
+              modifier = Modifier.testTag("hud_toggle_roms"),
+            )
+            FilterChip(
+              selected = activeHudPanel == GameTestHudPanel.HARDWARE,
+              onClick = { toggleHudPanel(GameTestHudPanel.HARDWARE) },
+              leadingIcon = { Icon(Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(15.dp)) },
+              label = { Text("Hardware", style = MaterialTheme.typography.labelSmall) },
+              colors = FilterChipDefaults.filterChipColors(selectedContainerColor = SgbEmerald.copy(alpha = 0.22f), selectedLabelColor = SgbEmerald),
+              modifier = Modifier.testTag("hud_toggle_hardware"),
+            )
+          }
           FilterChip(
             selected = activeHudPanel == GameTestHudPanel.AUDIO,
             onClick = { toggleHudPanel(GameTestHudPanel.AUDIO) },
@@ -524,12 +546,28 @@ fun GameTestSection(
           onRecruitRangerTarget = onRecruitRangerTarget,
           onPerformCampActivity = onPerformCampActivity,
         )
-        GameTestHudPanel.HARDWARE -> GameTestHardwareRuntimeCard(
-          hardwareState = hardwareState,
-          onSelectPreset = onSelectHardwarePreset,
-          onApplyCustomCombo = onApplyCustomHardwareCombo,
-          onToggleHardwareTour = onToggleHardwareTour,
-        )
+        GameTestHudPanel.ROMS -> if (!isStandaloneRomPlayer) {
+          RomComparisonExporterSheet(
+            compiledRoms = compiledRoms,
+            activeProjectTitle = activeProjectTitle,
+            onGenerateAllTenRoms = onGenerateAllTenRoms,
+            onCompileCurrentStudioRom = onCompileCurrentStudioRom,
+            onImportPrismRom = onImportPrismRom,
+            onLaunchStandaloneRom = onLaunchStandaloneRom,
+            onInstallHomeShortcut = onInstallHomeShortcut,
+            onExportPrismRom = onExportPrismRom,
+            onDeleteCompiledRom = onDeleteCompiledRom,
+            onClose = { activeHudPanel = null },
+          )
+        }
+        GameTestHudPanel.HARDWARE -> if (!isStandaloneRomPlayer) {
+          GameTestHardwareRuntimeCard(
+            hardwareState = hardwareState,
+            onSelectPreset = onSelectHardwarePreset,
+            onApplyCustomCombo = onApplyCustomHardwareCombo,
+            onToggleHardwareTour = onToggleHardwareTour,
+          )
+        }
         GameTestHudPanel.AUDIO -> GameTestAudioConsoleCard(
           hardwareState = hardwareState,
           audioState = audioState,
@@ -564,6 +602,7 @@ fun GameTestSection(
           onToggleUseCustomPlayerAvatar = onToggleUseCustomPlayerAvatar,
           onSaveHeroToRoom = { onSaveHeroToRoom(playerTrainer) },
           compact = true,
+          showSpriteEditorBridge = !isStandaloneRomPlayer,
         )
         GameTestHudPanel.SUMMONER -> GameTestTrainersAndDexPanel(
           activeChapter = activeChapter,
@@ -840,18 +879,20 @@ fun GameTestSection(
                   },
                   modifier = Modifier.testTag("open_hero_customizer_chip"),
                 )
-                FilterChip(
-                  selected = false,
-                  onClick = onOpenTrainerStudio,
-                  label = {
-                    Text(
-                      text = "3D Studio",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = CyberCyan,
-                    )
-                  },
-                  modifier = Modifier.testTag("open_trainer_3d_studio_chip"),
-                )
+                if (!isStandaloneRomPlayer) {
+                  FilterChip(
+                    selected = false,
+                    onClick = onOpenTrainerStudio,
+                    label = {
+                      Text(
+                        text = "3D Studio",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyberCyan,
+                      )
+                    },
+                    modifier = Modifier.testTag("open_trainer_3d_studio_chip"),
+                  )
+                }
               }
 
               AutoTileMapCanvas(

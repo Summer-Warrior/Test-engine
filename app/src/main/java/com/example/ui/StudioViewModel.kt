@@ -42,6 +42,7 @@ import com.example.engine.BattleTurnField
 import com.example.engine.BgmThemeId
 import com.example.engine.CampActivityType
 import com.example.engine.CampaignProgressionState
+import com.example.engine.BattleTowerState
 import com.example.engine.CanonBattleResolver
 import com.example.engine.CanonRegionChapter
 import com.example.engine.ContestAppealSpec
@@ -55,10 +56,14 @@ import com.example.engine.LentalSnapEngine
 import com.example.engine.MasterCanonTemplateCatalog
 import com.example.engine.MoveDirection
 import com.example.engine.MysteryRiftEngine
+import com.example.engine.MysteryRiftState
 import com.example.engine.OmniHardwareAudioEngine
 import com.example.engine.PoiInteractionKind
 import com.example.engine.PokemonType
 import com.example.engine.PrismContestEngine
+import com.example.engine.PrismContestState
+import com.example.engine.PrismRomCartridge
+import com.example.engine.PrismRomPackageEngine
 import com.example.engine.ProceduralCreatureRigEngine
 import com.example.engine.RangerCampEngine
 import com.example.engine.RegionPointOfInterest
@@ -180,7 +185,7 @@ class StudioViewModel(
   private val _activeTab = MutableStateFlow(StudioWorkspaceTab.FUSION_ENGINE)
   val activeTab: StateFlow<StudioWorkspaceTab> = _activeTab.asStateFlow()
 
-  // Hoisted Trainer & Protagonist Studio State (persisted to Room v5 custom_trainers)
+  // Hoisted Trainer & Protagonist Studio State (persisted to Room v6 custom_trainers)
   private val _playerTrainer = MutableStateFlow(TrainerCatalogAndRigEngine.defaultProtagonist)
   val playerTrainer: StateFlow<TrainerCharacterSpec> = _playerTrainer.asStateFlow()
 
@@ -189,6 +194,9 @@ class StudioViewModel(
 
   private val _viewportInspectsTrainer = MutableStateFlow(false)
   val viewportInspectsTrainer: StateFlow<Boolean> = _viewportInspectsTrainer.asStateFlow()
+
+  private val _compiledRoms = MutableStateFlow<List<PrismRomCartridge>>(emptyList())
+  val compiledRoms: StateFlow<List<PrismRomCartridge>> = _compiledRoms.asStateFlow()
 
   val customTrainers: StateFlow<List<CustomTrainerEntity>> =
     (customTrainerDao?.observeAllCustomTrainers() ?: flowOf(emptyList()))
@@ -352,7 +360,7 @@ class StudioViewModel(
         initialValue = emptyMap(),
       )
 
-  // 100% Offline Room v5 Single-Source-of-Truth Project Stream
+  // 100% Offline Room v6 Single-Source-of-Truth Project Stream
   val cloudFanGamesState: StateFlow<UiState<List<FanGameProject>>> =
     localProjectRepository.observeProjects()
       .map<List<FanGameProject>, UiState<List<FanGameProject>>> { UiState.Success(it) }
@@ -506,7 +514,7 @@ class StudioViewModel(
         hasAutoLoadedInitialProject = true
       }
 
-      // 1b. Restore saved Protagonist customization from Room v5 custom_trainers
+      // 1b. Restore saved Protagonist customization from Room v6 custom_trainers
       customTrainerDao?.getSavedProtagonist()?.let { savedHero ->
         val spec = savedHero.toTrainerSpec()
         _playerTrainer.value = spec
@@ -514,6 +522,12 @@ class StudioViewModel(
           _selectedViewportTrainer.value = spec
         }
       }
+
+      // 1c. Auto-restore saved hand-painted 16x16 Hero Avatar bitmap from Room saved_sprites
+      restoreSavedHeroAvatarBitmapFromRoom(projectKey)
+
+      // 1d. Hydrate compiled standalone `.prismrom` cartridge library
+      _compiledRoms.value = PrismRomPackageEngine.listCompiledRoms(appContext)
 
       // 2. Load & persist all 156 hardware profiles
       val specs = UniversalHardwareRegistry.loadFromAssets(appContext)
@@ -1550,9 +1564,9 @@ class StudioViewModel(
       _isSavingProject.value = false
       audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
       _statusBannerMessage.value = if (isHeroAvatar) {
-        "Saved Hero Avatar '$cleanName' (${s.frames.size} frames) to Room v5! Active on Overworld & Trainer Stage."
+        "Saved Hero Avatar '$cleanName' (${s.frames.size} frames) to Room v6! Active on Overworld & Trainer Stage."
       } else {
-        "Saved Creature Rig '$cleanName' (${s.frames.size} frames) to Room v5! Active in Viewport & Game Test."
+        "Saved Creature Rig '$cleanName' (${s.frames.size} frames) to Room v6! Active in Viewport & Game Test."
       }
     }
   }
@@ -1814,7 +1828,7 @@ class StudioViewModel(
       customTrainerDao?.upsertCustomTrainer(entity)
     }
     audioEngine.playSfx(StudioSfxType.LEVEL_UP)
-    _statusBannerMessage.value = "Saved Trainer '${spec.name}' (${spec.appearance.outfitStyle.label}) to Room v5!"
+    _statusBannerMessage.value = "Saved Trainer '${spec.name}' (${spec.appearance.outfitStyle.label}) to Room v6!"
   }
 
   fun deleteCustomTrainerFromRoom(trainerId: String) {
@@ -1822,7 +1836,7 @@ class StudioViewModel(
       customTrainerDao?.deleteCustomTrainer(trainerId)
     }
     audioEngine.playSfx(StudioSfxType.UI_CANCEL)
-    _statusBannerMessage.value = "Removed custom Trainer from Room v5 vault."
+    _statusBannerMessage.value = "Removed custom Trainer from Room v6 vault."
   }
 
   fun dismissTrainerVsBanner() {
@@ -3492,6 +3506,14 @@ class StudioViewModel(
   private fun applyProjectToEngine(project: FanGameProject, announce: Boolean) {
     _activeProjectId.value = project.id
     syncLocalHardwareFromProjectToken(project)
+    // Reset in-progress Side-Mode sessions so runs from a prior project never bleed across switches
+    _sideModesState.update {
+      it.copy(
+        tower = BattleTowerState(),
+        contest = PrismContestState(),
+        rift = MysteryRiftState(),
+      )
+    }
     viewModelScope.launch(Dispatchers.IO) {
       val saved = persistenceDao.getCampaignState(project.id)
       if (saved != null) {
@@ -3501,6 +3523,7 @@ class StudioViewModel(
       }
       loadMapForRegion(project.id, _activeMapRegionId.value)
       restoreSideModeRecordFromRoom(project.id)
+      restoreSavedHeroAvatarBitmapFromRoom(project.id)
     }
     _hasUnsavedChanges.value = false
     if (announce) {
@@ -4130,6 +4153,267 @@ class StudioViewModel(
     }
     audioEngine.playSfx(StudioSfxType.HEAL_CHIME)
     _statusBannerMessage.value = nextCamp.lastActivityLabel
+  }
+
+  // ===============================================================================================
+  // SAVED HERO AVATAR COLD-START RESTORE & STANDALONE `.prismrom` COMPARISON CARTRIDGE HOOKS
+  // ===============================================================================================
+
+  private suspend fun restoreSavedHeroAvatarBitmapFromRoom(projectKey: String) {
+    val savedHeroSprite = persistenceDao.getAllSavedSpritesSnapshot()
+      .firstOrNull { it.spriteSeedId == 0 && it.projectId == projectKey }
+    if (savedHeroSprite != null) {
+      val palette = SpritePixelMatrixEngine.deserializePaletteJson(savedHeroSprite.paletteJson)
+      val firstFrame = SpritePixelMatrixEngine.deserializeFramesRleJson(savedHeroSprite.framesRleJson).firstOrNull()
+      if (firstFrame != null) {
+        val heroBmp = SpritePixelMatrixEngine.renderFrameToBitmap(firstFrame, palette, scale = 4)
+        withContext(Dispatchers.Main) {
+          _spriteEditorState.update {
+            it.copy(
+              playerCustomSpriteBitmap = heroBmp,
+              useCustomPlayerAvatarBitmap = true,
+            )
+          }
+        }
+      }
+    }
+  }
+
+  private suspend fun collectCurrentRegionMapOverrides(projectKey: String): Map<String, List<Int>> {
+    val overrides = linkedMapOf<String, List<Int>>()
+    MasterCanonTemplateCatalog.worldChapters.forEach { chapter ->
+      val saved = persistenceDao.getSavedMap(mapStorageKey(projectKey, chapter.id))
+      val tiles = saved?.tilesCsv?.split(",")?.mapNotNull { it.trim().toIntOrNull() }
+        ?.takeIf { it.size == MasterCanonTemplateCatalog.MAP_GRID_SIZE * MasterCanonTemplateCatalog.MAP_GRID_SIZE }
+        ?: chapter.defaultMapTiles
+      overrides[chapter.id] = tiles
+    }
+    return overrides
+  }
+
+  private suspend fun collectCurrentHeroAvatarPayload(projectKey: String): Triple<String, String, Boolean> {
+    val editor = _spriteEditorState.value
+    val savedHero = persistenceDao.getAllSavedSpritesSnapshot()
+      .firstOrNull { it.spriteSeedId == 0 && it.projectId == projectKey }
+    val rle = if (savedHero != null) {
+      SpritePixelMatrixEngine.deserializeFramesRleJson(savedHero.framesRleJson)
+        .firstOrNull()
+        ?.let { SpritePixelMatrixEngine.encodeFrameRle(it) }
+        .orEmpty()
+    } else if (editor.editingTarget == SpriteEditTarget.PLAYER_AVATAR && editor.useCustomPlayerAvatarBitmap) {
+      SpritePixelMatrixEngine.encodeFrameRle(editor.currentFrame)
+    } else {
+      ""
+    }
+    val palJson = savedHero?.paletteJson
+      ?: if (rle.isNotEmpty()) SpritePixelMatrixEngine.serializePaletteJson(editor.paletteArgb) else ""
+    return Triple(rle, palJson, editor.useCustomPlayerAvatarBitmap && rle.isNotEmpty())
+  }
+
+  fun refreshCompiledRoms() {
+    viewModelScope.launch(Dispatchers.IO) {
+      _compiledRoms.value = PrismRomPackageEngine.listCompiledRoms(appContext)
+    }
+  }
+
+  fun generateAllTenComparisonRoms() {
+    viewModelScope.launch(Dispatchers.IO) {
+      val projectKey = activePersistenceProjectKey()
+      val title = activeProject.value?.title?.ifBlank { "Pokémon: Prism Resonance" } ?: "Pokémon: Prism Resonance"
+      val allIds = _hardwareRegistryState.value.allPlatforms.map { it.id }
+      val gt = _gameTestState.value
+      val maps = collectCurrentRegionMapOverrides(projectKey)
+      val (heroRle, heroPal, useHeroBmp) = collectCurrentHeroAvatarPayload(projectKey)
+      val roms = PrismRomPackageEngine.compileAllTenComparisonRoms(
+        romTitle = title,
+        allCatalogIds = allIds,
+        activeRegionId = gt.activeRegionId,
+        playerRow = gt.playerRow,
+        playerCol = gt.playerCol,
+        regionMapOverrides = maps,
+        playerTrainer = _playerTrainer.value,
+        playerCustomAvatarRle = heroRle,
+        playerCustomAvatarPaletteJson = heroPal,
+        useCustomPlayerAvatarBitmap = useHeroBmp,
+        partyDexIds = gt.activePartyDexIds,
+        partyLevels = gt.partyLevelMap,
+        heldItemsMap = gt.heldItemsMap,
+        completedRegionIds = _campaignState.value.completedChapterIds,
+        sideModeRecord = _sideModesState.value.record,
+      )
+      roms.forEach { PrismRomPackageEngine.saveRomToLibrary(appContext, it) }
+      _compiledRoms.value = PrismRomPackageEngine.listCompiledRoms(appContext)
+      withContext(Dispatchers.Main) {
+        audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+        _statusBannerMessage.value = "Compiled all 10 Comparison ROMs for '$title'! Ready to Launch Standalone or Install Home Icons."
+      }
+    }
+  }
+
+  fun compileCurrentStudioRom() {
+    viewModelScope.launch(Dispatchers.IO) {
+      val projectKey = activePersistenceProjectKey()
+      val title = activeProject.value?.title?.ifBlank { "Pokémon: Prism Resonance" } ?: "Pokémon: Prism Resonance"
+      val hw = _hardwareRegistryState.value
+      val gt = _gameTestState.value
+      val maps = collectCurrentRegionMapOverrides(projectKey)
+      val (heroRle, heroPal, useHeroBmp) = collectCurrentHeroAvatarPayload(projectKey)
+      val rom = PrismRomPackageEngine.compileCurrentStudioRom(
+        romTitle = title,
+        activePlatformIds = hw.activePlatformIds,
+        allCatalogIds = hw.allPlatforms.map { it.id },
+        disciplineMode = hw.disciplineMode,
+        characterMixMode = hw.characterMixMode,
+        extraVisualAudio = hw.extraPretty,
+        pixelTo3dBlend = _fusionConfig.value.pixelTo3dBlend,
+        hardwareSummaryLabel = hw.activeRuntimeLabel,
+        activeRegionId = gt.activeRegionId,
+        playerRow = gt.playerRow,
+        playerCol = gt.playerCol,
+        regionMapOverrides = maps,
+        playerTrainer = _playerTrainer.value,
+        playerCustomAvatarRle = heroRle,
+        playerCustomAvatarPaletteJson = heroPal,
+        useCustomPlayerAvatarBitmap = useHeroBmp,
+        partyDexIds = gt.activePartyDexIds,
+        partyLevels = gt.partyLevelMap,
+        heldItemsMap = gt.heldItemsMap,
+        completedRegionIds = _campaignState.value.completedChapterIds,
+        sideModeRecord = _sideModesState.value.record,
+      )
+      PrismRomPackageEngine.saveRomToLibrary(appContext, rom)
+      _compiledRoms.value = PrismRomPackageEngine.listCompiledRoms(appContext)
+      withContext(Dispatchers.Main) {
+        audioEngine.playSfx(StudioSfxType.CAPTURE_SPARKLE)
+        _statusBannerMessage.value = "Compiled custom Studio ROM '${rom.editionSubtitle}' (${hw.activePlatformIds.size} HW locked)!"
+      }
+    }
+  }
+
+  fun importPrismRomJson(rawJson: String) {
+    viewModelScope.launch(Dispatchers.IO) {
+      val parsed = PrismRomPackageEngine.parseRom(rawJson)
+      parsed.onSuccess { rom ->
+        PrismRomPackageEngine.saveRomToLibrary(appContext, rom)
+        _compiledRoms.value = PrismRomPackageEngine.listCompiledRoms(appContext)
+        withContext(Dispatchers.Main) {
+          audioEngine.playSfx(StudioSfxType.LEVEL_UP)
+          _statusBannerMessage.value = "Imported '${rom.editionSubtitle}' (.prismrom) into ROM library!"
+        }
+      }.onFailure { err ->
+        withContext(Dispatchers.Main) {
+          audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+          _statusBannerMessage.value = "Invalid .prismrom file: ${err.localizedMessage ?: "Parse error"}"
+        }
+      }
+    }
+  }
+
+  suspend fun exportPrismRomJson(romId: String): Result<String> = withContext(Dispatchers.IO) {
+    runCatching {
+      val rom = PrismRomPackageEngine.loadRomById(appContext, romId)
+        ?: _compiledRoms.value.firstOrNull { it.romId == romId }
+        ?: error("Compiled ROM '$romId' not found.")
+      PrismRomPackageEngine.serializeRom(rom)
+    }
+  }
+
+  fun deleteCompiledRom(romId: String) {
+    viewModelScope.launch(Dispatchers.IO) {
+      PrismRomPackageEngine.deleteRomFromLibrary(appContext, romId)
+      _compiledRoms.value = PrismRomPackageEngine.listCompiledRoms(appContext)
+      withContext(Dispatchers.Main) {
+        audioEngine.playSfx(StudioSfxType.UI_CANCEL)
+        _statusBannerMessage.value = "Removed compiled ROM from library."
+      }
+    }
+  }
+
+  /**
+   * Loads a compiled [PrismRomCartridge] inside the isolated standalone [com.example.PrismRomPlayerActivity],
+   * locking hardware shaders, audio DSP traits, 22-region maps, Hero Avatar, 6-slot party, and Side Mode records.
+   */
+  fun loadStandaloneRomCartridge(cartridge: PrismRomCartridge) {
+    val allSpecs = _hardwareRegistryState.value.allPlatforms
+    val allIds = allSpecs.map { it.id }.toSet()
+    val lockedIds = if (cartridge.useAllCatalogPlatforms || cartridge.activePlatformIds.isEmpty()) {
+      allIds.ifEmpty { UniversalHardwareRegistry.defaultCuratedHardwareIds }
+    } else {
+      cartridge.activePlatformIds.toSet()
+    }
+    _fusionConfig.update {
+      it.copy(
+        presetName = cartridge.editionSubtitle,
+        pixelTo3dBlend = cartridge.pixelTo3dBlend.coerceIn(0f, 1f),
+        activeChipIds = lockedIds,
+      )
+    }
+    recomputeHardwareConvergence(
+      allPlatforms = allSpecs,
+      activeIds = lockedIds,
+      disciplineMode = cartridge.disciplineMode,
+      characterMixMode = cartridge.characterMixMode,
+      extraPretty = cartridge.extraVisualAudio,
+      runtimePresetId = cartridge.comparisonTag,
+      runtimeLabel = cartridge.editionSubtitle,
+      isTourActive = false,
+      tourStepLabel = "",
+    )
+    _playerTrainer.value = cartridge.playerTrainer
+    _selectedViewportTrainer.value = cartridge.playerTrainer
+
+    if (cartridge.useCustomPlayerAvatarBitmap && cartridge.playerCustomAvatarRle.isNotBlank()) {
+      val palette = SpritePixelMatrixEngine.deserializePaletteJson(cartridge.playerCustomAvatarPaletteJson)
+      val frame = SpritePixelMatrixEngine.decodeFrameRle(cartridge.playerCustomAvatarRle)
+      val heroBmp = SpritePixelMatrixEngine.renderFrameToBitmap(frame, palette, scale = 4)
+      _spriteEditorState.update {
+        it.copy(playerCustomSpriteBitmap = heroBmp, useCustomPlayerAvatarBitmap = true)
+      }
+    } else {
+      _spriteEditorState.update { it.copy(useCustomPlayerAvatarBitmap = false) }
+    }
+
+    val chapter = MasterCanonTemplateCatalog.worldChapters.firstOrNull { it.id == cartridge.activeRegionId }
+      ?: MasterCanonTemplateCatalog.worldChapters.first()
+    val regionTiles = cartridge.regionMapOverrides[chapter.id]
+      ?.takeIf { it.size == MasterCanonTemplateCatalog.MAP_GRID_SIZE * MasterCanonTemplateCatalog.MAP_GRID_SIZE }
+      ?: chapter.defaultMapTiles
+    _activeMapRegionId.value = chapter.id
+    _mapGrid.value = regionTiles
+
+    val completedSet = cartridge.completedRegionIds.toSet()
+    val badges = MasterCanonTemplateCatalog.worldChapters.filter { it.id in completedSet }.sumOf { it.gymOrTrialCount }
+    _campaignState.value = CampaignProgressionState(
+      completedChapterIds = completedSet,
+      harmonicShardsCollected = completedSet.size,
+      badgesEarned = badges,
+      animeRibbonsAndKeys = cartridge.sideModeRecord.contestRibbonsWon,
+      partyDexIds = cartridge.partyDexIds.ifEmpty { listOf(25, 6, 94, 448, 658, 384) },
+    )
+
+    val party = cartridge.partyDexIds.ifEmpty { listOf(25, 6, 94, 448, 658, 384) }
+    _gameTestState.update { gt ->
+      gt.copy(
+        activeRegionId = chapter.id,
+        playerRow = cartridge.playerRow.coerceIn(0, MasterCanonTemplateCatalog.MAP_GRID_SIZE - 1),
+        playerCol = cartridge.playerCol.coerceIn(0, MasterCanonTemplateCatalog.MAP_GRID_SIZE - 1),
+        activePartyDexIds = party,
+        activePartyIndex = 0,
+        partyLevelMap = cartridge.partyLevels.ifEmpty { gt.partyLevelMap },
+        heldItemsMap = cartridge.heldItemsMap,
+        battleLog = listOf("Booted ${cartridge.romTitle} — ${cartridge.editionSubtitle} (${lockedIds.size} HW locked).") + gt.battleLog.take(7),
+      )
+    }
+
+    _sideModesState.update {
+      it.copy(
+        record = cartridge.sideModeRecord,
+        tower = BattleTowerState(),
+        contest = PrismContestState(),
+        rift = MysteryRiftState(),
+      )
+    }
+    _audioConsoleState.update { it.copy(activeBgmTheme = chapter.resolveBgmTheme()) }
   }
 
   companion object {

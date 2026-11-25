@@ -25,6 +25,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".PrismRomPlayerActivity"
+            android:exported="true"
+            android:label="Prism ROM Player"
+            android:taskAffinity="com.aistudio.pokefusionstudio.romplayer"
+            android:documentLaunchMode="always"
+            android:theme="@style/Theme.MyApplication">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" android:mimeType="*/*" android:pathPattern=".*\\.prismrom" />
+                <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.prismrom" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="prismrom" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

@@ -785,4 +785,113 @@ class OmniStudioUpgradeVerificationTest {
     val cachedSecond = OmniHardwareAudioEngine.renderBgmLoopPcm(BgmThemeId.PRISM_TITLE, audioParams)
     assertTrue("Repeated BGM render should return cached ShortArray instance", cachedFirst === cachedSecond)
   }
+
+  @Test
+  fun `standalone prismrom 10-profile compiler lossless JSON round-trip cartridge icon bitmap and PrismRomPlayerActivity intent work end-to-end`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val allCatalog = UniversalHardwareRegistry.loadFromAssets(context)
+    val allIds = allCatalog.map { it.id }
+    val allIdSet = allIds.toSet()
+
+    // 1. Every single comparison profile's explicit hardware platform IDs exist in hardware_registry.json
+    com.example.engine.PrismRomPackageEngine.comparisonProfiles.forEach { profile ->
+      if (!profile.useAllCatalogPlatforms) {
+        profile.platformIds.forEach { pid ->
+          assertTrue("Platform ID '$pid' in ${profile.comparisonTag} missing from hardware_registry.json", pid in allIdSet)
+        }
+      }
+    }
+
+    // 2. Compile all 10 comparison ROMs with custom Hero Avatar RLE, 22 maps, party & Side Mode records
+    val maps = MasterCanonTemplateCatalog.worldChapters.associate { it.id to it.defaultMapTiles }
+    val hero = com.example.engine.TrainerCatalogAndRigEngine.defaultProtagonist.copy(
+      name = "Lyra",
+      title = "Prism Champion",
+    )
+    val (heroPalette, heroFrames) = com.example.engine.ProceduralCreatureRigEngine.sampleToSpriteEditor16(25)
+    val heroRle = SpritePixelMatrixEngine.encodeFrameRle(heroFrames.first())
+    val heroPalJson = SpritePixelMatrixEngine.serializePaletteJson(heroPalette)
+    val record = com.example.data.local.SideModeRecordEntity(
+      projectId = "prism_resonance_default",
+      battleTowerBestStreak = 21,
+      battleTowerCurrentStreak = 7,
+      battlePoints = 250,
+      contestRibbonsWon = 6,
+      contestBestScore = 20,
+      bestSnapScore = 4800,
+      bestSnapStarRating = 4,
+      bestSnapCaption = "Pikachu (4★ • Prism Bloom)",
+      deepestRiftFloor = 5,
+      riftGuardiansDefeated = 3,
+      rangerCapturesCompleted = 11,
+      campMealsServed = 8,
+    )
+
+    val roms = com.example.engine.PrismRomPackageEngine.compileAllTenComparisonRoms(
+      romTitle = "Pokémon: Prism Resonance",
+      allCatalogIds = allIds,
+      activeRegionId = "hoenn",
+      playerRow = 7,
+      playerCol = 9,
+      regionMapOverrides = maps,
+      playerTrainer = hero,
+      playerCustomAvatarRle = heroRle,
+      playerCustomAvatarPaletteJson = heroPalJson,
+      useCustomPlayerAvatarBitmap = true,
+      partyDexIds = listOf(25, 6, 94, 448, 658, 384),
+      partyLevels = mapOf(25 to 60, 6 to 62, 384 to 78),
+      heldItemsMap = mapOf(25 to "light_ball", 384 to "life_orb"),
+      completedRegionIds = setOf("kanto", "johto", "hoenn"),
+      sideModeRecord = record,
+    )
+    assertEquals(10, roms.size)
+
+    // 3. Lossless serializeRom() -> parseRom() round-trip for ALL 10 comparison cartridges
+    roms.forEach { rom ->
+      val json = com.example.engine.PrismRomPackageEngine.serializeRom(rom)
+      val parsed = com.example.engine.PrismRomPackageEngine.parseRom(json).getOrThrow()
+      assertEquals(rom.romId, parsed.romId)
+      assertEquals(rom.comparisonTag, parsed.comparisonTag)
+      assertEquals(rom.editionSubtitle, parsed.editionSubtitle)
+      assertEquals(rom.extraPrettyMask, parsed.extraPrettyMask)
+      assertEquals(rom.characterMixModeName, parsed.characterMixModeName)
+      assertEquals(rom.activeRegionId, parsed.activeRegionId)
+      assertEquals(22, parsed.regionMapOverrides.size)
+      assertEquals("Lyra", parsed.playerTrainer.name)
+      assertEquals("Prism Champion", parsed.playerTrainer.title)
+      assertTrue(parsed.useCustomPlayerAvatarBitmap)
+      assertEquals(heroRle, parsed.playerCustomAvatarRle)
+      assertEquals(heroPalJson, parsed.playerCustomAvatarPaletteJson)
+      assertEquals(rom.partyDexIds, parsed.partyDexIds)
+      assertEquals("life_orb", parsed.heldItemsMap[384])
+      assertEquals(21, parsed.sideModeRecord.battleTowerBestStreak)
+      assertEquals(250, parsed.sideModeRecord.battlePoints)
+      assertEquals(5, parsed.sideModeRecord.deepestRiftFloor)
+      if (!rom.useAllCatalogPlatforms) {
+        assertEquals(rom.activePlatformIds, parsed.activePlatformIds)
+      } else {
+        assertTrue(parsed.useAllCatalogPlatforms)
+      }
+
+      // 4. Save to internal filesDir/prism_roms, reload, render procedural cartridge Bitmap, and validate launch Intent
+      val savedFile = com.example.engine.PrismRomPackageEngine.saveRomToLibrary(context, rom)
+      assertTrue(savedFile.exists())
+      val loaded = com.example.engine.PrismRomPackageEngine.loadRomById(context, rom.romId)
+      assertNotNull(loaded)
+
+      val iconBmp = com.example.engine.PrismRomPackageEngine.renderCartridgeIconBitmap(rom, sizePx = 128)
+      assertEquals(128, iconBmp.width)
+      assertEquals(128, iconBmp.height)
+
+      val launchIntent = com.example.engine.PrismRomPackageEngine.buildLaunchIntent(context, rom.romId, savedFile.absolutePath)
+      assertEquals(PrismRomPlayerActivity::class.java.name, launchIntent.component?.className)
+      assertEquals(rom.romId, launchIntent.getStringExtra(com.example.engine.PrismRomPackageEngine.EXTRA_ROM_ID))
+      assertEquals(savedFile.absolutePath, launchIntent.getStringExtra(com.example.engine.PrismRomPackageEngine.EXTRA_ROM_PATH))
+      assertTrue((launchIntent.flags and android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0)
+      assertTrue((launchIntent.flags and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK) != 0)
+    }
+
+    val listed = com.example.engine.PrismRomPackageEngine.listCompiledRoms(context)
+    assertTrue("Expected all 10 compiled ROMs in internal library, got ${listed.size}", listed.size >= 10)
+  }
 }

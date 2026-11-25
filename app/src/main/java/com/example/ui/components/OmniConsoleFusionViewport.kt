@@ -406,7 +406,6 @@ fun OmniConsoleFusionViewport(
               onSelectViewportTrainer(preset)
             },
             onUpdateProtagonistIdentity = { name, title ->
-              onSelectViewportTrainer(playerTrainer)
               onUpdateProtagonistIdentity(name, title)
             },
             onUpdateProtagonistAppearance = { transform ->

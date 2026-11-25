@@ -699,4 +699,116 @@ class CanonEngineVerificationTest {
     assertEquals(100, bond)
     assertEquals(4, camp.activePartyMoodBoostNonce)
   }
+
+  @Test
+  fun `all 10 comparison ROM profiles compile cleanly with distinct locked hardware tags extra-pretty bitmask round-trip and 22-region maps`() {
+    val profiles = PrismRomPackageEngine.comparisonProfiles
+    assertEquals("Expected all 10 flagship comparison ROM profiles", 10, profiles.size)
+    assertEquals(
+      setOf(
+        "GB_DMG",
+        "NES_VRC6",
+        "SNES_FX2",
+        "GBA_AGB",
+        "PS1_GTE",
+        "GC_TEV",
+        "NDS_25D",
+        "3DS_PICA200",
+        "SWITCH_HD2D",
+        "ULTIMATE_156_CURATED",
+      ),
+      profiles.map { it.comparisonTag }.toSet(),
+    )
+
+    // Verify 9-bit Extra Pretty bitmask round-trips every individual toggle and ALL_ENABLED losslessly
+    val allMask = PrismRomPackageEngine.encodeExtraPrettyMask(com.example.data.model.ExtraVisualAudioSettings.ALL_ENABLED)
+    assertEquals(0x1FF, allMask)
+    assertEquals(com.example.data.model.ExtraVisualAudioSettings.ALL_ENABLED, PrismRomPackageEngine.decodeExtraPrettyMask(allMask))
+    assertEquals(com.example.data.model.ExtraVisualAudioSettings(), PrismRomPackageEngine.decodeExtraPrettyMask(0))
+
+    // Compile all 10 comparison ROMs from "Pokémon: Prism Resonance" with 22-region maps, custom hero, party & Side Modes
+    val all22Maps = MasterCanonTemplateCatalog.worldChapters.associate { it.id to it.defaultMapTiles }
+    val customHero = TrainerCatalogAndRigEngine.defaultProtagonist.copy(name = "Aria", title = "Prism Sovereign")
+    val sampleRecord = com.example.data.local.SideModeRecordEntity(
+      projectId = "prism_resonance_default",
+      battleTowerBestStreak = 14,
+      battleTowerCurrentStreak = 7,
+      battlePoints = 120,
+      contestRibbonsWon = 5,
+      contestBestScore = 18,
+      bestSnapScore = 4450,
+      bestSnapStarRating = 4,
+      bestSnapCaption = "Rayquaza (4★ • Prism Bloom)",
+      deepestRiftFloor = 5,
+      riftGuardiansDefeated = 2,
+      rangerCapturesCompleted = 9,
+      campMealsServed = 6,
+    )
+    val simulatedCatalog = (UniversalHardwareRegistry.defaultCuratedHardwareIds + profiles.flatMap { it.platformIds }).sorted()
+    val compiledTen = PrismRomPackageEngine.compileAllTenComparisonRoms(
+      romTitle = "Pokémon: Prism Resonance",
+      allCatalogIds = simulatedCatalog,
+      activeRegionId = "sinnoh",
+      playerRow = 6,
+      playerCol = 8,
+      regionMapOverrides = all22Maps,
+      playerTrainer = customHero,
+      playerCustomAvatarRle = "0:4,1:4,2:4",
+      playerCustomAvatarPaletteJson = "[4278248959,4294912645]",
+      useCustomPlayerAvatarBitmap = true,
+      partyDexIds = listOf(25, 6, 94, 448, 658, 384),
+      partyLevels = mapOf(25 to 62, 384 to 75),
+      heldItemsMap = mapOf(25 to "light_ball", 384 to "life_orb"),
+      completedRegionIds = setOf("kanto", "johto", "hoenn"),
+      sideModeRecord = sampleRecord,
+    )
+
+    assertEquals(10, compiledTen.size)
+    assertEquals(10, compiledTen.map { it.romId }.toSet().size)
+    compiledTen.forEach { rom ->
+      assertEquals("Pokémon: Prism Resonance", rom.romTitle)
+      assertEquals("sinnoh", rom.activeRegionId)
+      assertEquals(22, rom.regionMapOverrides.size)
+      assertEquals("Aria", rom.playerTrainer.name)
+      assertTrue(rom.useCustomPlayerAvatarBitmap)
+      assertEquals("0:4,1:4,2:4", rom.playerCustomAvatarRle)
+      assertEquals(6, rom.partyDexIds.size)
+      assertEquals("life_orb", rom.heldItemsMap[384])
+      assertEquals(14, rom.sideModeRecord.battleTowerBestStreak)
+      assertEquals(120, rom.sideModeRecord.battlePoints)
+      assertTrue("ROM ${rom.comparisonTag} must lock at least 1 hardware platform", rom.activePlatformIds.isNotEmpty())
+      assertTrue("Shortcut short label must stay concise: ${rom.shortShortcutLabel}", rom.shortShortcutLabel.length <= 18)
+    }
+
+    val ultimateRom = compiledTen.first { it.comparisonTag == "ULTIMATE_156_CURATED" }
+    assertTrue(ultimateRom.useAllCatalogPlatforms)
+    assertEquals(simulatedCatalog.size, ultimateRom.activePlatformIds.size)
+
+    val customStudioRom = PrismRomPackageEngine.compileCurrentStudioRom(
+      romTitle = "Pokémon: Prism Resonance",
+      activePlatformIds = setOf("snes_sfc", "gamecube_tev", "nintendo_switch"),
+      allCatalogIds = simulatedCatalog,
+      disciplineMode = com.example.data.model.MasterDisciplineMode.SHOVEL_KNIGHT_CURATED,
+      characterMixMode = com.example.data.model.CharacterMixMode.SPLIT_BEAM_MORPH,
+      extraVisualAudio = com.example.data.model.ExtraVisualAudioSettings(waterCausticsAndFoam = true),
+      pixelTo3dBlend = 0.52f,
+      hardwareSummaryLabel = "Custom 3-Era Fusion",
+      activeRegionId = "kanto",
+      playerRow = 8,
+      playerCol = 8,
+      regionMapOverrides = all22Maps,
+      playerTrainer = customHero,
+      playerCustomAvatarRle = "",
+      playerCustomAvatarPaletteJson = "",
+      useCustomPlayerAvatarBitmap = false,
+      partyDexIds = listOf(25, 6, 94, 448, 658, 384),
+      partyLevels = mapOf(25 to 50),
+      heldItemsMap = emptyMap(),
+      completedRegionIds = emptySet(),
+      sideModeRecord = sampleRecord,
+    )
+    assertEquals("CURRENT_STUDIO_BUILD", customStudioRom.comparisonTag)
+    assertEquals(3, customStudioRom.activePlatformIds.size)
+    assertFalse(customStudioRom.useAllCatalogPlatforms)
+  }
 }

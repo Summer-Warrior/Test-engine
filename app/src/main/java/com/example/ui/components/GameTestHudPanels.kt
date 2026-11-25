@@ -460,8 +460,9 @@ fun GameTestBagDrawerCard(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Column(modifier = Modifier.weight(1f)) {
+            val showQty = !reusable || (item.category == StudioItemCatalog.CAT_HOLD_ITEM && item.quantity > 1)
             Text(
-              text = if (reusable) item.name else "${item.name}  ×${item.quantity}",
+              text = if (showQty) "${item.name}  ×${item.quantity}" else item.name,
               style = MaterialTheme.typography.labelLarge,
               color = StudioTextPrimary,
               fontWeight = FontWeight.Bold,

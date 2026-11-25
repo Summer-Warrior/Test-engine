@@ -270,13 +270,13 @@ fun CloudFanGameHubSection(
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(
                 imageVector = Icons.Default.Storage,
-                contentDescription = "Local Studio Vault Offline Room v5 DB",
+                contentDescription = "Local Studio Vault Offline Room v6 DB",
                 tint = CyberCyan,
                 modifier = Modifier.size(16.dp),
               )
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "LOCAL STUDIO VAULT • OFFLINE ROOM v5",
+                text = "LOCAL STUDIO VAULT • OFFLINE ROOM v6",
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberCyan,
               )

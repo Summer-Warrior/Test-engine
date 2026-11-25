@@ -99,7 +99,8 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  implementation(libs.coil.compose)
+  // Unused: 100% offline procedural 2D/3D engine replaces Coil image loading
+  // implementation(libs.coil.compose)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.okhttp)

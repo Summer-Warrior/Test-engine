@@ -33,10 +33,15 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
@@ -99,10 +104,26 @@ fun ProtagonistWardrobePanel(
   onToggleUseCustomPlayerAvatar: () -> Unit,
   onSaveHeroToRoom: () -> Unit,
   compact: Boolean = false,
+  showSpriteEditorBridge: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
   val app = playerTrainer.appearance
   val customImageBmp = remember(playerCustomAvatarBitmap) { playerCustomAvatarBitmap?.asImageBitmap() }
+  var nameDraft by remember(playerTrainer.id) { mutableStateOf(playerTrainer.name) }
+  var titleDraft by remember(playerTrainer.id) { mutableStateOf(playerTrainer.title) }
+  var nameFieldFocused by remember { mutableStateOf(false) }
+  var titleFieldFocused by remember { mutableStateOf(false) }
+
+  LaunchedEffect(playerTrainer.id, playerTrainer.name) {
+    if (!nameFieldFocused && playerTrainer.name != nameDraft) {
+      nameDraft = playerTrainer.name
+    }
+  }
+  LaunchedEffect(playerTrainer.id, playerTrainer.title) {
+    if (!titleFieldFocused && playerTrainer.title != titleDraft) {
+      titleDraft = playerTrainer.title
+    }
+  }
 
   Column(
     modifier = modifier
@@ -218,27 +239,55 @@ fun ProtagonistWardrobePanel(
       }
     }
 
-    // Editable Player Name & Trainer Title
+    // Editable Player Name & Trainer Title (local draft allows full backspace clearing without snapping back)
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       OutlinedTextField(
-        value = playerTrainer.name,
-        onValueChange = { onUpdateProtagonistIdentity(it, playerTrainer.title) },
+        value = nameDraft,
+        onValueChange = { raw ->
+          val clipped = raw.take(18)
+          nameDraft = clipped
+          if (clipped.isNotBlank()) {
+            onUpdateProtagonistIdentity(clipped, titleDraft.ifBlank { playerTrainer.title })
+          }
+        },
         label = { Text("Player Name", style = MaterialTheme.typography.labelSmall) },
         singleLine = true,
         modifier = Modifier
           .weight(1f)
+          .onFocusChanged { focusState ->
+            val wasFocused = nameFieldFocused
+            nameFieldFocused = focusState.isFocused
+            if (wasFocused && !focusState.isFocused && nameDraft.isBlank()) {
+              nameDraft = "Nova"
+              onUpdateProtagonistIdentity("Nova", titleDraft.ifBlank { "Prism Ace" })
+            }
+          }
           .testTag("hero_name_input"),
       )
       OutlinedTextField(
-        value = playerTrainer.title,
-        onValueChange = { onUpdateProtagonistIdentity(playerTrainer.name, it) },
+        value = titleDraft,
+        onValueChange = { raw ->
+          val clipped = raw.take(24)
+          titleDraft = clipped
+          if (clipped.isNotBlank()) {
+            onUpdateProtagonistIdentity(nameDraft.ifBlank { playerTrainer.name }, clipped)
+          }
+        },
         label = { Text("Trainer Title", style = MaterialTheme.typography.labelSmall) },
         singleLine = true,
         modifier = Modifier
           .weight(1.25f)
+          .onFocusChanged { focusState ->
+            val wasFocused = titleFieldFocused
+            titleFieldFocused = focusState.isFocused
+            if (wasFocused && !focusState.isFocused && titleDraft.isBlank()) {
+              titleDraft = "Prism Ace"
+              onUpdateProtagonistIdentity(nameDraft.ifBlank { "Nova" }, "Prism Ace")
+            }
+          }
           .testTag("hero_title_input"),
       )
     }
@@ -406,24 +455,34 @@ fun ProtagonistWardrobePanel(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      OutlinedButton(
-        onClick = onEditHeroInSpriteEditor,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-          .weight(1f)
-          .heightIn(min = 48.dp)
-          .testTag("edit_hero_in_sprite_editor_button"),
-      ) {
-        Icon(Icons.Default.Brush, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Edit Hero in Sprite Editor", style = MaterialTheme.typography.labelSmall, color = CyberCyan, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      if (showSpriteEditorBridge) {
+        OutlinedButton(
+          onClick = onEditHeroInSpriteEditor,
+          shape = RoundedCornerShape(10.dp),
+          modifier = Modifier
+            .weight(1f)
+            .heightIn(min = 48.dp)
+            .testTag("edit_hero_in_sprite_editor_button"),
+        ) {
+          Icon(Icons.Default.Brush, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Edit Hero in Sprite Editor", style = MaterialTheme.typography.labelSmall, color = CyberCyan, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
       }
 
       Button(
-        onClick = onSaveHeroToRoom,
+        onClick = {
+          val safeName = nameDraft.trim().ifBlank { "Nova" }
+          val safeTitle = titleDraft.trim().ifBlank { "Prism Ace" }
+          nameDraft = safeName
+          titleDraft = safeTitle
+          onUpdateProtagonistIdentity(safeName, safeTitle)
+          onSaveHeroToRoom()
+        },
         colors = ButtonDefaults.buttonColors(containerColor = SgbEmerald, contentColor = StudioDeepNavy),
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
+          .let { if (!showSpriteEditorBridge) it.weight(1f) else it }
           .heightIn(min = 48.dp)
           .testTag("save_hero_wardrobe_button"),
       ) {

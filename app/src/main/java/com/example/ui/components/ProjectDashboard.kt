@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Visibility
@@ -73,8 +74,8 @@ import java.util.Locale
 
 /**
  * Project Dashboard displaying the real-time Project Overview statistics component
- * alongside fan game projects stored in the Local Studio Vault (Offline Room v4 DB),
- * with Android Storage Access Framework JSON Export/Import and 'View Details' actions.
+ * alongside fan game projects stored in the Local Studio Vault (Offline Room v6 DB),
+ * with Android Storage Access Framework JSON Export/Import, Standalone Comparison ROMs, and 'View Details'.
  */
 @Composable
 fun ProjectDashboard(
@@ -91,9 +92,19 @@ fun ProjectDashboard(
   onSeedStarterProjects: () -> Unit,
   onExportActiveProjectJson: () -> Unit,
   onImportProjectJson: () -> Unit,
+  compiledRoms: List<com.example.engine.PrismRomCartridge> = emptyList(),
+  activeProjectTitle: String = "Pokémon: Prism Resonance",
+  onGenerateAllTenRoms: () -> Unit = {},
+  onCompileCurrentStudioRom: () -> Unit = {},
+  onImportPrismRom: () -> Unit = {},
+  onLaunchStandaloneRom: (com.example.engine.PrismRomCartridge) -> Unit = {},
+  onInstallHomeShortcut: (com.example.engine.PrismRomCartridge) -> Unit = {},
+  onExportPrismRom: (com.example.engine.PrismRomCartridge) -> Unit = {},
+  onDeleteCompiledRom: (String) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var selectedProjectForDetails by remember { mutableStateOf<FanGameProject?>(null) }
+  var showComparisonRomsSheet by remember { mutableStateOf(false) }
 
   Column(
     modifier = modifier
@@ -186,7 +197,7 @@ fun ProjectDashboard(
             value = when (cloudGamesState) {
               is UiState.Loading -> "Loading..."
               is UiState.Error -> "Notice"
-              is UiState.Success -> "Offline Room v5"
+              is UiState.Success -> "Offline Room v6"
             },
             accentColor = when (cloudGamesState) {
               is UiState.Loading -> SuperFxGold
@@ -237,7 +248,52 @@ fun ProjectDashboard(
             Text("Import (.json)", color = CyberCyan, fontWeight = FontWeight.Bold, maxLines = 1)
           }
         }
+
+        // Standalone Comparison ROMs (.prismrom) Compiler & Home-Screen Installer Launcher
+        Button(
+          onClick = { showComparisonRomsSheet = !showComparisonRomsSheet },
+          colors = ButtonDefaults.buttonColors(
+            containerColor = SuperFxGold,
+            contentColor = StudioDeepNavy,
+          ),
+          shape = RoundedCornerShape(10.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .testTag("dashboard_comparison_roms_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Memory,
+            contentDescription = "Standalone Comparison ROMs",
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = if (showComparisonRomsSheet) {
+              "Hide Comparison ROMs Studio (${compiledRoms.size})"
+            } else {
+              "Comparison ROMs — Compile & Install Standalone (${compiledRoms.size})"
+            },
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+          )
+        }
       }
+    }
+
+    if (showComparisonRomsSheet) {
+      RomComparisonExporterSheet(
+        compiledRoms = compiledRoms,
+        activeProjectTitle = activeProjectTitle,
+        onGenerateAllTenRoms = onGenerateAllTenRoms,
+        onCompileCurrentStudioRom = onCompileCurrentStudioRom,
+        onImportPrismRom = onImportPrismRom,
+        onLaunchStandaloneRom = onLaunchStandaloneRom,
+        onInstallHomeShortcut = onInstallHomeShortcut,
+        onExportPrismRom = onExportPrismRom,
+        onDeleteCompiledRom = onDeleteCompiledRom,
+        onClose = { showComparisonRomsSheet = false },
+      )
     }
 
     // Offline Room Project List
